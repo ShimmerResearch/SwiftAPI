@@ -1074,6 +1074,16 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         packetSize = TimeStampPacketByteSize // Time stamp
         timeSensor.packetIndexTimeStamp = 0
         timeSensor.sensorEnabled = true
+        /* Both callers set CurrentSamplingRate from the inquiry response just
+           above, and the rate is what sizes the reorder window: eight sample
+           periods is what separates a pair of packets delivered out of order
+           from a dropout that happens to span the counter's roll-over point.
+           A rate that arrives as a division by zero is +Infinity here, and
+           reorderWindowTicks answers 0 for it - the branch off is the only
+           safe reading of an unknown rate. */
+        timeSensor.reorderWindowTicks = TimestampUnwrap.reorderWindowTicks(
+            samplingRateHz: CurrentSamplingRate,
+            maxTicks: timeSensor.TimeStampPacketRawMaxTicks)
         //}
 
         var enabledSensors = Int(0)
