@@ -39,6 +39,14 @@ public class TimeSensor : Sensor , SensorProcessing{
     var TimeStampPacketRawMaxTicks:Int = TimestampUnwrap.ticksMax3Byte
     var CurrentTimeStampCycle:Double = 0
 
+    /// False only before the first sample of a stream. The pair above cannot say
+    /// it on their own: `(0, 0)` is the reset state and also a state the unwrap
+    /// can reach, when a reordered packet lands exactly on the counter's origin.
+    /// A fresh `TimeSensor` is what starts a stream here - `Shimmer3Protocol`
+    /// builds one in `createSensors()` - so there is no separate reset to keep in
+    /// step with this.
+    var hasPreviousTimeStamp = false
+
     /// How far behind its predecessor a value may be and still be read as a
     /// reordered packet, in ticks. `0` disables the branch, which is what an
     /// unknown sampling rate has to mean; `Shimmer3Protocol` sets it from the
@@ -64,7 +72,9 @@ public class TimeSensor : Sensor , SensorProcessing{
                                             lastUnwrapped: LastReceivedTimeStamp,
                                             cycle: CurrentTimeStampCycle,
                                             maxTicks: TimeStampPacketRawMaxTicks,
-                                            reorderWindowTicks: reorderWindowTicks)
+                                            reorderWindowTicks: reorderWindowTicks,
+                                            hasPreviousSample: hasPreviousTimeStamp)
+        hasPreviousTimeStamp = true
         lastRecordRejected = result.rejected
         LastReceivedTimeStamp = result.unwrappedTicks
         CurrentTimeStampCycle = result.cycle

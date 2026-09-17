@@ -34,7 +34,11 @@ import Foundation
 /// — the same defect, in all five, for years — because each was reviewed on its
 /// own against prose. Change the rule here and the vectors will say so.
 ///
-/// Mirrors `TimestampUnwrap.cs` and `TimestampUnwrap.java` method for method.
+/// Mirrors `TimestampUnwrap.cs` and `TimestampUnwrap.java` method for method,
+/// with one deliberate difference: both of those keep an overload that infers
+/// "no previous sample" from the state being `(0, 0)`, for callers written
+/// before that turned out to be ambiguous. This file is new, so it has no such
+/// callers and asks outright instead.
 public enum TimestampUnwrap {
 
     /// The 3-byte counter's range. The only width this API's packet parser
@@ -128,10 +132,17 @@ public enum TimestampUnwrap {
     }
 
     /// The rule, with reorder detection disabled.
+    ///
+    /// `hasPreviousSample` is asked for here too. Defaulting it would be a quiet
+    /// way to get the first sample of a stream wrong, and there is no caller
+    /// older than this file to keep compatible - unlike the C# and Java copies,
+    /// which keep an overload that infers it from `(0, 0)` for exactly that
+    /// reason.
     public static func unwrap(rawTicks: Double, lastUnwrapped: Double, cycle: Double,
-                              maxTicks: Int) -> Result {
+                              maxTicks: Int, hasPreviousSample: Bool) -> Result {
         return unwrap(rawTicks: rawTicks, lastUnwrapped: lastUnwrapped, cycle: cycle,
-                      maxTicks: maxTicks, reorderWindowTicks: 0.0)
+                      maxTicks: maxTicks, reorderWindowTicks: 0.0,
+                      hasPreviousSample: hasPreviousSample)
     }
 
     /// Place one sample on the timeline.
@@ -153,15 +164,28 @@ public enum TimestampUnwrap {
     /// - Parameters:
     ///   - rawTicks: The counter value out of the packet.
     ///   - lastUnwrapped: The previous accepted sample's unwrapped value.
-    ///   - cycle: The previous accepted sample's cycle. `lastUnwrapped == 0 &&
-    ///     cycle == 0` is the reset state and means *no previous sample*, which
-    ///     is why a stream opening on a value near the top of the range is not
-    ///     read as a reorder against a phantom zero.
+    ///   - cycle: The previous accepted sample's cycle.
     ///   - maxTicks: The counter's range.
     ///   - reorderWindowTicks: From `reorderWindowTicks(samplingRateHz:maxTicks:)`.
+    ///   - hasPreviousSample: False only before the first sample of a stream.
+    ///     Asked outright rather than inferred from `(0, 0)`, which is the reset
+    ///     state *and* a state this rule can reach: a reorder that lands exactly
+    ///     on the counter's origin leaves both at zero in the middle of a
+    ///     stream, after which the next packet is read as a first sample and
+    ///     passed through - so one arriving from just before the origin is
+    ///     placed a whole modulo late rather than a few ticks behind. The
+    ///     conformance vector
+    ///     `reorder-onto-origin-then-earlier-packet-24bit` is that sequence.
+    ///     Hosts that keep the previous raw value instead of a cycle count, as
+    ///     the web SDK and pyshimmer do, never had the ambiguity.
     public static func unwrap(rawTicks: Double, lastUnwrapped: Double, cycle: Double,
-                              maxTicks: Int, reorderWindowTicks: Double) -> Result {
-        if lastUnwrapped == 0.0 && cycle == 0.0 {
+                              maxTicks: Int, reorderWindowTicks: Double,
+                              hasPreviousSample: Bool) -> Result {
+        if !hasPreviousSample {
+            // No predecessor to measure against. Taking the reset state as a real
+            // sample at zero would let a first raw value near the top of the range
+            // read as a packet reordered across a boundary, placing a whole
+            // recording one modulo early.
             return Result(unwrappedTicks: rawTicks, cycle: 0.0, rejected: false)
         }
 

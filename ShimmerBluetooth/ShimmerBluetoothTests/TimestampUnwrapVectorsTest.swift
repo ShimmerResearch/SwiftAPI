@@ -265,6 +265,14 @@ let sharedUnwrapVectors: [UnwrapVector] = [
         expectedUnwrapped: [5000, 5288, 16782216],
         expectedRejected: [false, false, false],
         expectedFinalCycle: 1),
+    UnwrapVector(
+        id: "reorder-onto-origin-then-earlier-packet-24bit",
+        modulo: 16777216,
+        reorderWindowTicks: 520.0,
+        raw: [520, 0, 16777200],
+        expectedUnwrapped: [520, 0, -16],
+        expectedRejected: [false, false, false],
+        expectedFinalCycle: -1),
 ]
 
 let sharedWindowDerivationCases: [WindowDerivationCase] = [
@@ -367,7 +375,8 @@ final class TimestampUnwrapVectorsTest: XCTestCase {
         "reorder-window-boundary-exclusive-24bit",
         "low-rate-clamp-16bit",
         "high-rate-reorder-24bit",
-        "reorder-beyond-eight-periods-is-a-wrap-24bit"
+        "reorder-beyond-eight-periods-is-a-wrap-24bit",
+        "reorder-onto-origin-then-earlier-packet-24bit"
         ]
         XCTAssertEqual(sharedUnwrapVectors.map { $0.id }, expectedIds)
         XCTAssertEqual(sharedWindowDerivationCases.count, 11)
@@ -377,13 +386,16 @@ final class TimestampUnwrapVectorsTest: XCTestCase {
         for vector in sharedUnwrapVectors {
             var lastUnwrapped = 0.0
             var cycle = 0.0
+            var hasPrevious = false
 
             for (i, raw) in vector.raw.enumerated() {
                 let result = TimestampUnwrap.unwrap(rawTicks: raw,
                                                     lastUnwrapped: lastUnwrapped,
                                                     cycle: cycle,
                                                     maxTicks: vector.modulo,
-                                                    reorderWindowTicks: vector.reorderWindowTicks)
+                                                    reorderWindowTicks: vector.reorderWindowTicks,
+                                                    hasPreviousSample: hasPrevious)
+                hasPrevious = true
                 XCTAssertEqual(result.unwrappedTicks, vector.expectedUnwrapped[i], accuracy: 0.0,
                                "\(vector.id): sample \(i)")
                 XCTAssertEqual(result.rejected, vector.expectedRejected[i],
@@ -523,6 +535,30 @@ final class TimestampUnwrapVectorsTest: XCTestCase {
         XCTAssertEqual(after, milliseconds(Double(TimestampUnwrap.ticksMax3Byte) + 100),
                        accuracy: 1e-9)
         XCTAssertEqual(sensor.CurrentTimeStampCycle, 1.0)
+    }
+
+    /// A reorder can land exactly on the counter's origin, which puts a host that
+    /// stores (unwrapped, cycle) back into the state it uses for "no sample yet".
+    /// The next packet is then read as a first sample and passed through, so one
+    /// arriving from just before the origin is placed a whole modulo late.
+    ///
+    /// Also the only case in the set whose cycle goes negative, which is a real
+    /// state: the raw value is derived back out of it on the next sample.
+    func testAReorderOntoTheOriginDoesNotLookLikeAFreshStream() {
+        let sensor = TimeSensor()
+        sensor.reorderWindowTicks = TimestampUnwrap.reorderWindowTicks(
+            samplingRateHz: 32768.0 / 65, maxTicks: TimestampUnwrap.ticksMax3Byte)
+        XCTAssertEqual(sensor.reorderWindowTicks, 520.0)
+
+        _ = sensor.calibrateTimeStamp(timeStamp: 520)
+        XCTAssertEqual(sensor.calibrateTimeStamp(timeStamp: 0), 0.0, accuracy: 0.0)
+        XCTAssertFalse(sensor.lastRecordRejected,
+                       "a reorder onto the origin, not an unstamped record")
+
+        let earlier = sensor.calibrateTimeStamp(
+            timeStamp: Double(TimestampUnwrap.ticksMax3Byte - 16))
+        XCTAssertEqual(earlier, milliseconds(-16), accuracy: 1e-9)
+        XCTAssertEqual(sensor.CurrentTimeStampCycle, -1.0)
     }
 
     /// The ObjectCluster a consumer actually reads: the sensor values survive,
