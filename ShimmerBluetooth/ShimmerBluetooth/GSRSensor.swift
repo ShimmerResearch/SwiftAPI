@@ -19,7 +19,8 @@ public class GSRSensor: Sensor , SensorProcessing{
                 287.000,     //Range 1
                 1000.000,     //Range 2
                 3300.000];  //Range 3
-    // Equation breaks down below 683 for range 3
+    // Equation breaks down below 683 on every range: 683 is the first code above the 0.5 V
+    // amplifier reference at 3.0 V (see calibrateGsrDataToResistanceWithOpenCircuitLimit)
     
     
     public static let SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS : [[Double]] = [
@@ -35,7 +36,7 @@ public class GSRSensor: Sensor , SensorProcessing{
         let rawDataX = Double(ShimmerUtilities.parseSensorData(sensorData: x, dataType: SensorDataType.u16)!)
         if (calibrationEnabled){
             var newGSRRange = gsrRange
-            var gsrData = Double((Int(rawDataX) & 4095));
+            let gsrData = Double((Int(rawDataX) & 4095));
             var gsrResistanceKOhms: Double = 0
             if (gsrRange == 4)
             {
@@ -43,27 +44,24 @@ public class GSRSensor: Sensor , SensorProcessing{
             }
             if (gsrRange == 0 || newGSRRange == 0)
             {
-                gsrResistanceKOhms = calibrateGsrDataToResistanceFromAmplifierEq(gsrData, 0);
+                gsrResistanceKOhms = calibrateGsrDataToResistanceWithOpenCircuitLimit(gsrData, 0);
             }
             else if (gsrRange == 1 || newGSRRange == 1)
             {
                 
-                gsrResistanceKOhms = calibrateGsrDataToResistanceFromAmplifierEq(gsrData, 1);
+                gsrResistanceKOhms = calibrateGsrDataToResistanceWithOpenCircuitLimit(gsrData, 1);
             }
             else if (gsrRange == 2 || newGSRRange == 2)
             {
                 
-                gsrResistanceKOhms = calibrateGsrDataToResistanceFromAmplifierEq(gsrData, 2);
+                gsrResistanceKOhms = calibrateGsrDataToResistanceWithOpenCircuitLimit(gsrData, 2);
             }
             else if (gsrRange == 3 || newGSRRange == 3)
             {
                 
-                if (gsrData < GSRSensor.GSR_UNCAL_LIMIT_RANGE3)
-                {
-                    gsrData = GSRSensor.GSR_UNCAL_LIMIT_RANGE3;
-                }
-                gsrResistanceKOhms = calibrateGsrDataToResistanceFromAmplifierEq(gsrData, 3);
+                gsrResistanceKOhms = calibrateGsrDataToResistanceWithOpenCircuitLimit(gsrData, 3);
             }
+            gsrResistanceKOhms = NudgeGsrResistance(gsrResistanceKOhms, gsrRange)
             print("GSR (kOhms): \(gsrResistanceKOhms)")
             objectCluster.addData(sensorName: GSRSensor.GSR_SKIN_RESISTANCE, formatName: SensorFormats.Calibrated.rawValue, unitName: SensorUnits.kiloOhms.rawValue, value: gsrResistanceKOhms)
              
@@ -88,13 +86,46 @@ public class GSRSensor: Sensor , SensorProcessing{
         return max(minVal, min(maxVal, valToNudge))
     }
     
+    /// Clamp a fixed range to its own window; floor auto-range at 8 kOhm, the smallest resistance any
+    /// range can measure, as the Java driver and the C# API do (ASM-2156). Any other setting (-1 before
+    /// the InfoMem is read, or 5-7 from the 3-bit mask) has no window, and passes through rather than
+    /// trapping on the array index.
     func NudgeGsrResistance(_ gsrResistanceKOhms : Double,_ gsrRangeSetting: Int) ->Double
             {
-                if (gsrRangeSetting != 4)
+                if (gsrRangeSetting == 4)
+                {
+                    return max(GSRSensor.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS[0][0], gsrResistanceKOhms);
+                }
+                if (gsrRangeSetting >= 0 && gsrRangeSetting < GSRSensor.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS.count)
                 {
                     return nudgeDouble(gsrResistanceKOhms, GSRSensor.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS[gsrRangeSetting][0], GSRSensor.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS[gsrRangeSetting][1]);
                 }
                 return gsrResistanceKOhms;
+            }
+    
+    /// calibrateGsrDataToResistanceFromAmplifierEq, reading an open circuit as open on every range
+    /// (DEV-1070).
+    ///
+    /// The amplifier equation has no positive solution at or below the amplifier's 0.5 V reference: no
+    /// skin resistance can pull the output under it, so a code there means the electrodes are open.
+    /// Range 3 has long raised such a code to GSR_UNCAL_LIMIT_RANGE3, the first code above the
+    /// reference, so that an open circuit decodes as thousands of MOhm. Ranges 0-2 did not, and in
+    /// auto-range they see these codes too. When the electrodes come off, the device climbs one range
+    /// at a time and repeats the sample that triggered each switch through the 80 ms settling time,
+    /// tagged with the range it was measured on. On ranges 0-2 the equation gave those samples a
+    /// negative resistance.
+    ///
+    /// So a code below the limit decodes as range 3 at the limit, whatever range it was measured on,
+    /// and an open circuit reads the same on every range as the settled range 3 does. Codes at or above
+    /// the limit decode on their own range, as before. The Java driver and the C# API apply the same
+    /// rule.
+    func calibrateGsrDataToResistanceWithOpenCircuitLimit(_ gsrUncalibratedData : Double, _ range : Int) -> Double
+            {
+                if (gsrUncalibratedData < GSRSensor.GSR_UNCAL_LIMIT_RANGE3)
+                {
+                    return calibrateGsrDataToResistanceFromAmplifierEq(GSRSensor.GSR_UNCAL_LIMIT_RANGE3, 3);
+                }
+                return calibrateGsrDataToResistanceFromAmplifierEq(gsrUncalibratedData, range);
             }
     
     func calibrateGsrDataToResistanceFromAmplifierEq(_ gsrUncalibratedData : Double, _ range : Int) -> Double
