@@ -66,6 +66,9 @@ public class ConfigByteLayoutShimmer3{
     
     static let bitShiftBMPX80PressureResolution =       4;
     static let maskBMPX80PressureResolution =           0x03;
+
+    static let bitShiftBMP390PressureResolution =       0;
+    static let maskBMP390PressureResolution =           0x01;
     
     static let bitShiftLSM303DLHCMagRange =            5;
     static let maskLSM303DLHCMagRange =               0x07;
