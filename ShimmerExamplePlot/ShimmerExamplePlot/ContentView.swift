@@ -160,7 +160,16 @@ struct ContentView: View {
                 viewModel.protocolShimmer3 = protocolSelection
             }
             
+            Picker("CRC Mode", selection: $viewModel.crcModeIndex) {
+                ForEach(0..<viewModel.crcModes.count, id: \.self) { index in
+                    Text(viewModel.crcModes[index])
+                }
+            }
+            .disabled(viewModel.stateText == "Streaming" || viewModel.isSensorCommandInFlight)
+            
             Text("BT State: \(viewModel.stateText)")
+            Text("Active CRC Mode: \(viewModel.currentCRCModeText)")
+            Text("PRR: \(viewModel.packetReceptionRate >= 0 ? "\(viewModel.packetReceptionRate)%" : "-")")
             Button("Connect Shimmer3",action: {Task {
                 do {
                     viewModel.delegate = self
@@ -181,6 +190,12 @@ struct ContentView: View {
             }
             })
             .disabled(viewModel.stateText == "Disconnected" || viewModel.stateText == "Configuring")
+            
+            Button("Set CRC Mode Shimmer3",action:{ Task {
+                await viewModel.setCRCModeDev2()
+            }
+            })
+            .disabled(viewModel.stateText != "Connected" || viewModel.isSensorCommandInFlight || viewModel.protocolShimmer3 != 0)
             
             Button("StartStreaming Shimmer3",action:{ Task {
                 do {
