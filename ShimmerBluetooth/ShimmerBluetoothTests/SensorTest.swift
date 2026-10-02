@@ -291,4 +291,55 @@ class SensorTest: XCTestCase {
         
     }
    
+    // DEV-1070: a GSR code below the range-3 open-circuit limit, 683, puts the amplifier output under
+    // its 0.5 V reference, which no skin resistance can do, so the electrodes are open, on every range.
+    // In auto-range ranges 0-2 see such codes as the device climbs after the electrodes come off, and
+    // they decoded to a negative resistance. They now decode as range 3 at the limit.
+    func testGSRBelowReferenceReadsOpenOnEveryRangeInAutoRange(){
+        let open = gsrResistanceKOhms(gsrRange: 4, range: 3, code: 683)
+        XCTAssertEqual(open, 4504500.0, accuracy: 0.001)
+        for range in 0...3 {
+            for code in [0, 500, 682] {
+                XCTAssertEqual(gsrResistanceKOhms(gsrRange: 4, range: range, code: code), open, "auto-range, range \(range), code \(code)")
+            }
+        }
+    }
+
+    // The nudge is now called, so a fixed range clamps to its own window: an open circuit reads the
+    // top of it, and full scale on range 1 (57.4 kOhm) the bottom.
+    func testGSRFixedRangesClampToTheirWindow(){
+        let top = [63.0, 220.0, 680.0, 4700.0]
+        for range in 0...3 {
+            XCTAssertEqual(gsrResistanceKOhms(gsrRange: range, range: range, code: 0), top[range], "fixed range \(range)")
+        }
+        XCTAssertEqual(gsrResistanceKOhms(gsrRange: 1, range: 1, code: 4095), 63.0)
+    }
+
+    func testGSRCodesFromTheLimitUpDecodeAsBefore(){
+        let gsrSensor = GSRSensor()
+        for range in 0...3 {
+            for code in [683, 684, 700, 1000, 2000, 3000, 4095] {
+                XCTAssertEqual(gsrResistanceKOhms(gsrRange: 4, range: range, code: code), gsrSensor.calibrateGsrDataToResistanceFromAmplifierEq(Double(code), range), "range \(range), code \(code)")
+            }
+        }
+    }
+
+    // -1 before the InfoMem is read, or 5-7 from the 3-bit mask: nothing is decoded, and the nudge
+    // must not trap on its array index.
+    func testGSRUnsetRangePassesThrough(){
+        for gsrRange in [-1, 5, 6, 7] {
+            XCTAssertEqual(gsrResistanceKOhms(gsrRange: gsrRange, range: 0, code: 2000), 0, "range setting \(gsrRange)")
+        }
+    }
+
+    /// Decode one GSR sample, range in bits 15-14 over the 12-bit code, LSB first, and return its resistance.
+    private func gsrResistanceKOhms(gsrRange: Int, range: Int, code: Int) -> Double {
+        let gsrSensor = GSRSensor()
+        gsrSensor.packetIndex = 0
+        gsrSensor.gsrRange = gsrRange
+        let raw = (range << 14) | code
+        let objectCluster = gsrSensor.processData(sensorPacket: [UInt8(raw & 0xFF), UInt8((raw >> 8) & 0xFF)], objectCluster: ObjectCluster(deviceName: "test"))
+        let name = [GSRSensor.GSR_SKIN_RESISTANCE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.kiloOhms.rawValue].joined(separator: "_")
+        return objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: name)!]
+    }
 }
