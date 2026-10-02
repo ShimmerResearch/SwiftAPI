@@ -603,7 +603,22 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         self.processing = true
         processingQueue.async {
             while self.processing {
-                if (self.BTState == Shimmer3BTState.STREAMING){
+                /* The Shimmer refused the command with a NACK (0xFE) rather than
+                 * acknowledging it. Checked ahead of the state branches below
+                 * because neither of them looks for it: every reply path keys off
+                 * ackCommand, so a refusal left the pending continuation suspended
+                 * and the awaiting call never returned. Nothing rescues that -
+                 * timeoutInSeconds is declared but never used - so the hang is
+                 * permanent.
+                 *
+                 * Held until the CRC bytes that follow the refusal have arrived
+                 * too, so the whole packet is consumed in one go and no CRC byte is
+                 * left to be read as the next packet header. */
+                if (self.receivedBytes.first==PacketTypeShimmer.nackCommand.rawValue
+                    && self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue)){
+                    self.processNackFromCommand()
+                }
+                else if (self.BTState == Shimmer3BTState.STREAMING){
                     
                     if (self.receivedBytes.count>self.PacketSize){
                         var received = Array(self.receivedBytes.prefix(self.PacketSize+1)) //1 for the start of the packet
@@ -1057,6 +1072,33 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 Thread.sleep(forTimeInterval: 0.001)
             }
         }
+    }
+    
+    /// Unwinds the command in flight after the Shimmer answered it with a NACK
+    /// (0xFE) instead of an ACK.
+    ///
+    /// A refusal means the device declined this command, not that the link is
+    /// gone, so the connection is left alone. The pending continuation is resumed
+    /// with a failure value so that the caller's `await` returns. Resuming exactly
+    /// once and then clearing it matters: a CheckedContinuation resumed twice
+    /// traps at runtime, and one that is never resumed suspends the task for good.
+    ///
+    /// The firmware refuses far more than it used to. Every command except
+    /// setSDSyncCommand and ACK is refused while SD sync is enabled, which covers
+    /// the whole connect sequence; so is any SET while the device is sensing, a
+    /// sync-mode mismatch, an out-of-range InfoMem or calibration write, and
+    /// several commands the firmware accepts but never implemented.
+    private func processNackFromCommand() {
+        print("NACK Received - the Shimmer refused the command: \(String(describing: self.commandSent))")
+
+        // The NACK is the whole response packet: drop it and its CRC bytes.
+        self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
+        self.commandSent = nil
+
+        self.continuation?.resume(returning: false)
+        self.continuation = nil
+        self.continuationByteArray?.resume(returning: nil)
+        self.continuationByteArray = nil
     }
     
     func stopProcessing(){
@@ -2073,6 +2115,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case setCRCCommand = 0x8b
         case calibDumpResponse = 0x99
         case getCalibDumpCommand = 0x9a
+        case nackCommand = 0xFE
         case ackCommand = 0xFF
         case getBmp180CalibrationCoefficientsCommand = 0x59
         case bmp180CalibrationCoefficientsResponse = 0x58
