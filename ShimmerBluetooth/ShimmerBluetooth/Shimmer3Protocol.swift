@@ -570,20 +570,52 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
         if (numberOfPackets==0){
             startTime = Date()
+            prrCurrentWindowStart = startTime
+            prrTrialStartTimeStampMs = timeSensor.LastReceivedTimeStamp / 32768 * 1000
         }
         numberOfPackets+=1
-        let endTime = Date()
-        var elapsedTime = endTime.timeIntervalSince(self.startTime)
-        if (elapsedTime == 0){
-            elapsedTime = 1
-        }
-        var PRR = Int((((Double)(numberOfPackets)/self.CurrentSamplingRate)/elapsedTime)*100)
-        if (PRR>100){
-            PRR=100
-        }
-        ojc.PacketReceptionRate = PRR
-        print("Elapsed time: \(elapsedTime) seconds ; Number of packets: \(numberOfPackets) ; Packet Reception Rate(%): \(PRR)")
+        prrCurrentPacketCount+=1
+        calculatePacketReceptionRates()
+        ojc.addData(sensorName: Shimmer3Protocol.PACKET_RECEPTION_RATE_CURRENT, formatName: Sensor.SensorFormats.Calibrated.rawValue, unitName: Sensor.SensorUnits.percent.rawValue, value: packetReceptionRateCurrent)
+        ojc.addData(sensorName: Shimmer3Protocol.PACKET_RECEPTION_RATE_OVERALL, formatName: Sensor.SensorFormats.Calibrated.rawValue, unitName: Sensor.SensorUnits.percent.rawValue, value: packetReceptionRateOverall)
+        ojc.PacketReceptionRate = Int(packetReceptionRateOverall)
+        print("Number of packets: \(numberOfPackets) ; Packet Reception Rate Current(%): \(packetReceptionRateCurrent) ; Trial(%): \(packetReceptionRateOverall)")
         return ojc
+    }
+    
+    // Packet reception rate, following the Shimmer Java/Android API (ShimmerDevice / SensorShimmerClock)
+    public static let PACKET_RECEPTION_RATE_CURRENT = "Packet_Reception_Rate_Current"
+    public static let PACKET_RECEPTION_RATE_OVERALL = "Packet_Reception_Rate_Trial"
+    static let PACKET_RECEPTION_RATE_CURRENT_INTERVAL_S: TimeInterval = 1 // mCalcReceptionRateMs in ShimmerBluetoothManager
+    public private(set) var packetReceptionRateCurrent: Double = 0
+    public private(set) var packetReceptionRateOverall: Double = 0
+    private var prrCurrentPacketCount = 0
+    private var prrCurrentWindowStart = Date()
+    private var prrTrialStartTimeStampMs: Double = 0
+    
+    func resetPacketReceptionRates() {
+        numberOfPackets = 0
+        prrCurrentPacketCount = 0
+        packetReceptionRateCurrent = 0
+        packetReceptionRateOverall = 0
+    }
+    
+    private func calculatePacketReceptionRates() {
+        // Trial: packets received vs packets expected from the device timestamps since streaming started
+        let timeDifferenceMs = timeSensor.LastReceivedTimeStamp / 32768 * 1000 - prrTrialStartTimeStampMs
+        let packetExpectedCount = Int(timeDifferenceMs / ((1 / CurrentSamplingRate) * 1000))
+        if packetExpectedCount > 0 {
+            packetReceptionRateOverall = min(max(Double(numberOfPackets) / Double(packetExpectedCount) * 100, 0), 100)
+        }
+        // Current: packets received over each interval vs packets expected for that interval
+        let now = Date()
+        let intervalS = now.timeIntervalSince(prrCurrentWindowStart)
+        if intervalS >= Shimmer3Protocol.PACKET_RECEPTION_RATE_CURRENT_INTERVAL_S {
+            let numPacketsShouldHaveReceived = intervalS * CurrentSamplingRate
+            packetReceptionRateCurrent = min(max(Double(prrCurrentPacketCount) / numPacketsShouldHaveReceived * 100, 0), 100)
+            prrCurrentPacketCount = 0
+            prrCurrentWindowStart = now
+        }
     }
     
     private var radio: BleByteRadio?
@@ -1380,7 +1412,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
         if (result!){
             print("StartStreaming!")
-            numberOfPackets = 0
+            resetPacketReceptionRates()
             self.changeState(btState:Shimmer3BTState.STREAMING)
         }
         return result
@@ -1450,6 +1482,25 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     
     public func sendWriteMemInfo() async -> Bool?{
         return false
+    }
+    
+    public func getCRCMode() -> BTCRCMode {
+        return CRCMode
+    }
+    
+    /// Changes the CRC mode while connected (not while streaming). Re-sends the inquiry command
+    /// afterwards so the streaming packet size accounts for the new number of CRC bytes.
+    public func setCRCMode(_ crcMode:BTCRCMode) async -> Bool {
+        guard BTState == Shimmer3BTState.CONNECTED else {
+            print("Cannot set CRC mode: device must be connected and not streaming")
+            return false
+        }
+        let res = await sendCRCCommand(crcMode: crcMode)
+        guard res == true else {
+            return false
+        }
+        await sendInquiryCommand()
+        return true
     }
     
     private func sendCRCCommand(crcMode:BTCRCMode) async ->Bool?{
