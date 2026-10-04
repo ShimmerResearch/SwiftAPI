@@ -603,7 +603,12 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         self.processing = true
         processingQueue.async {
             while self.processing {
-                if (self.BTState == Shimmer3BTState.STREAMING){
+                if (self.processStatusPushAtHead()){
+                    /* An unsolicited status push, consumed if it has all arrived and otherwise
+                     * held until it has. It is neither a reply nor a data packet, so neither
+                     * branch below may read the head of the buffer this pass. */
+                }
+                else if (self.BTState == Shimmer3BTState.STREAMING){
                     
                     if (self.receivedBytes.count>self.PacketSize){
                         var received = Array(self.receivedBytes.prefix(self.PacketSize+1)) //1 for the start of the packet
@@ -1063,6 +1068,52 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         self.processing = false
     }
     
+    /// The status the device last pushed unsolicited, this connection (log-and-stream-common
+    /// `docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md` §5.4). nil until it pushes one.
+    public private(set) var deviceStatus: Shimmer3DeviceStatus?
+
+    /// Takes an unsolicited status push off the head of receivedBytes, in any state and whatever
+    /// command is waiting (§5.4). Left alone, a push stayed at the head of the buffer, or had its
+    /// 0xFF taken for the waiting command's ACK, and every reply after it queued behind it; in a
+    /// stream it shifted every packet after it.
+    ///
+    /// - Returns: true when the head is a push, consumed or still arriving, so that nothing else
+    ///   reads the buffer this pass.
+    private func processStatusPushAtHead() -> Bool {
+        let statusWidth = Shimmer3StatusPush.statusPayloadBytes(hardwareVersion: REV_HW_MAJOR, firmwareIdentifier: REV_FW_IDENTIFIER, firmwareMajor: REV_FW_MAJOR, firmwareMinor: REV_FW_MINOR, firmwareInternal: REV_FW_INTERNAL)
+        switch Shimmer3StatusPush.frame(self.receivedBytes, statusBytes: statusWidth, crcBytes: Int(self.CRCMode.rawValue)) {
+        case .notAPush:
+            return false
+        case .incomplete:
+            return true
+        case .push(let length, let statusBytes, let crcValid):
+            let received = Array(self.receivedBytes.prefix(length))
+            self.receivedBytes.removeFirst(length)
+            guard crcValid, let status = Shimmer3DeviceStatus(statusBytes: statusBytes) else {
+                // Dropped rather than acted on. The firmware pushes again at its next change.
+                print("[CRC ERROR] : status push \(received)")
+                return true
+            }
+            print("Status push received: \(status)")
+            self.deviceStatus = status
+            /* The device stopped streaming by itself: a dock, the user button, the trial duration
+             * or a low battery. Nothing of the stream follows the push, because ShimSens_saveData
+             * sends only while btStreaming is set, so the bytes behind it are replies again.
+             *
+             * Not before this stream's first packet, though. START_STREAMING_COMMAND is ACKed
+             * before TASK_STARTSENSING sets btStreaming, so a push built between the two says
+             * streaming is off and the stream then starts all the same. And a stop this API sent
+             * is left to its own ACK, which the streaming branch waits for. */
+            if (self.BTState == Shimmer3BTState.STREAMING && !status.streaming
+                && self.numberOfPackets > 0 && self.commandSent != PacketTypeShimmer.stopStreamingCommand){
+                print("Streaming stopped by the device")
+                self.changeState(btState:Shimmer3BTState.CONNECTED)
+            }
+            self.delegate?.shimmerProtocolNewDeviceStatus(message: status)
+            return true
+        }
+    }
+
     
     
     func interpretDataPacketFormat(nC: Int, signalid: [UInt8]) {
@@ -1401,6 +1452,13 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     }
      
     private func sendStopStreamingCommandInternal() async -> Bool? {
+        guard BTState == Shimmer3BTState.STREAMING else {
+            // Nothing to stop: the stream never started, or the device ended it and said so in a
+            // status push (processStatusPushAtHead). Only the streaming branch reads a stop's ACK,
+            // so one sent now would sit ahead of every later reply.
+            print("StopStreaming not sent: not streaming")
+            return true
+        }
         let bytes:[UInt8] = [PacketTypeShimmer.stopStreamingCommand.rawValue]
         commandSent = PacketTypeShimmer.stopStreamingCommand
         radio!.writeBytes(bytes:bytes)
@@ -1692,36 +1750,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     }
     
     func shimmerUartCrcCalc(_ msg: [UInt8], _ len: Int) -> [UInt8] {
-        let CRC_INIT: Int = 0xB0CA
-        var crcCalc = shimmerUartCrcByte(CRC_INIT, msg[0])
-        var i = 1
-
-        while i < len {
-            crcCalc = shimmerUartCrcByte(crcCalc, msg[i])
-            i += 1
-        }
-
-        if len % 2 > 0 {
-            crcCalc = shimmerUartCrcByte(crcCalc, 0x00)
-        }
-
-        let crcCalcArray: [UInt8] = [
-            UInt8(crcCalc & 0xFF),    // CRC LSB
-            UInt8((crcCalc >> 8) & 0xFF)   // CRC MSB
-        ]
-
-        return crcCalcArray
-    }
-    
-    func shimmerUartCrcByte(_ crc: Int, _ b: UInt8) -> Int {
-        var crcValue = crc & 0xFFFF
-        crcValue = (crcValue >> 8) | (crcValue << 8)
-        crcValue ^= Int(b) & 0xFF
-        crcValue ^= (crcValue & 0xFF) >> 4
-        crcValue ^= crcValue << 12
-        crcValue ^= (crcValue & 0xFF) << 5
-        crcValue &= 0xFFFF
-        return crcValue
+        // In ShimmerUtilities so that the status push framing and the tests share this one copy.
+        return ShimmerUtilities.shimmerUartCrcCalc(msg, len)
     }
 
     func checkCrc(_ bufferTemp: [UInt8], _ length: Int) -> Bool {
@@ -2083,6 +2113,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case setExgRegsCommand = 0x61
         case exgRegsResponse = 0x62
         case getExgRegsCommand = 0x63
+        case statusResponse = 0x71
+        case instreamCmdResponse = 0x8A
     }
     public enum BTCRCMode: UInt8 {
         case OFF = 0
@@ -2138,6 +2170,7 @@ extension Shimmer3Protocol : ByteCommunicationDelegate {
     public func byteCommunicationDisconnected(connectionloss: Bool) {
         self.continuation?.resume(returning: false)
         self.continuation = nil
+        self.deviceStatus = nil
         self.changeState(btState:Shimmer3BTState.DISCONNECTED)
         stopProcessing()
         print("Current State: \(BTState)")
