@@ -187,4 +187,41 @@ public class ShimmerUtilities{
     public static func isAllZeros(_ bytes: [UInt8]) -> Bool {
         return bytes.allSatisfy { $0 == 0x00 }
     }
+
+    /// The Bluetooth link CRC over `msg[0..<len]`: a CRC-16 seeded with 0xB0CA, an odd length padded
+    /// with one 0x00 that is not sent. Returns [LSB, MSB]; a 1-byte CRC is the LSB alone.
+    /// log-and-stream-common `docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md` §3.3, and its reference
+    /// `Extras/python_scripts/Shimmer_common/shimmer_crc.py`.
+    public static func shimmerUartCrcCalc(_ msg: [UInt8], _ len: Int) -> [UInt8] {
+        let CRC_INIT: Int = 0xB0CA
+        var crcCalc = shimmerUartCrcByte(CRC_INIT, msg[0])
+        var i = 1
+
+        while i < len {
+            crcCalc = shimmerUartCrcByte(crcCalc, msg[i])
+            i += 1
+        }
+
+        if len % 2 > 0 {
+            crcCalc = shimmerUartCrcByte(crcCalc, 0x00)
+        }
+
+        let crcCalcArray: [UInt8] = [
+            UInt8(crcCalc & 0xFF),    // CRC LSB
+            UInt8((crcCalc >> 8) & 0xFF)   // CRC MSB
+        ]
+
+        return crcCalcArray
+    }
+
+    static func shimmerUartCrcByte(_ crc: Int, _ b: UInt8) -> Int {
+        var crcValue = crc & 0xFFFF
+        crcValue = (crcValue >> 8) | (crcValue << 8)
+        crcValue ^= Int(b) & 0xFF
+        crcValue ^= (crcValue & 0xFF) >> 4
+        crcValue ^= crcValue << 12
+        crcValue ^= (crcValue & 0xFF) << 5
+        crcValue &= 0xFFFF
+        return crcValue
+    }
 }
