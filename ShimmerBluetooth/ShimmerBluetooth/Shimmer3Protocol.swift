@@ -318,10 +318,22 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         var result = await radio?.connect()
         if (result!){
             startProcessing()
-            let res = await sendCRCCommand(crcMode: BTCRCMode.TWO_BYTE)
+            // Versions first, because which CRC is safe depends on the firmware (strongestSafeCRCMode).
+            // Off before them, so both ends read them without one: this class's CRCMode outlives a
+            // disconnect, and the firmware's outlives a link drop it never saw.
+            var res = await sendCRCCommand(crcMode: BTCRCMode.OFF)
             if (res!){
-                await sendReadFWVersionCommand()
-                await sendReadShimmerVersionCommand()
+                let fwVersionRead = await sendReadFWVersionCommand()
+                let shimmerVersionRead = await sendReadShimmerVersionCommand()
+                var crcMode = BTCRCMode.OFF
+                if (fwVersionRead == true && shimmerVersionRead == true){
+                    crcMode = strongestSafeCRCModeForDevice()
+                }
+                if (crcMode != BTCRCMode.OFF){
+                    res = await sendCRCCommand(crcMode: crcMode)
+                }
+            }
+            if (res!){
                 await sendReadExpBoardVersionCommand()
                 createSensors()
                 //[0x8E 0x80 0x00 0x00]
@@ -1453,10 +1465,17 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     }
     
     private func sendCRCCommand(crcMode:BTCRCMode) async ->Bool?{
+        // Refused rather than sent when this firmware cannot carry it (strongestSafeCRCMode).
+        let strongestSafe = strongestSafeCRCModeForDevice()
+        if (crcMode.rawValue > strongestSafe.rawValue){
+            print("Refusing CRC mode \(crcMode): firmware \(REV_FW_IDENTIFIER).\(REV_FW_MAJOR).\(REV_FW_MINOR).\(REV_FW_INTERNAL) on hardware \(REV_HW_MAJOR) carries \(strongestSafe) at most")
+            return false
+        }
         let bytes:[UInt8] = [PacketTypeShimmer.setCRCCommand.rawValue,crcMode.rawValue]
         commandSent = PacketTypeShimmer.setCRCCommand
-        radio!.writeBytes(bytes:bytes)
+        // Before the write, because the firmware applies the new mode to this command's own ACK.
         self.CRCMode = crcMode
+        radio!.writeBytes(bytes:bytes)
         return await withCheckedContinuation { continuation in
             if self.continuation == nil {
                 // 2
@@ -1465,6 +1484,51 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
     }
     
+    /// LogAndStream's identifier in the GET_FW_VERSION_COMMAND reply (`REV_FW_IDENTIFIER`).
+    static let FW_IDENTIFIER_LOGANDSTREAM = 3
+
+    /// The strongest link CRC this firmware carries safely, and so the one connect() turns on.
+    ///
+    /// Everything gets two bytes except two Shimmer3R LogAndStream ranges:
+    ///
+    /// - **v1.00.024 to v1.00.049 carry one byte at most.** They build the unsolicited status push in
+    ///   `uint8_t selfcmd[6]` (`ShimBt_instreamStatusRespSend`, log-and-stream-common
+    ///   `Comms/shimmer_bt_uart.c`). The push is the ACK prefix, 0x8A 0x71, two status bytes and the
+    ///   CRC, so a 2-byte CRC makes seven bytes and the seventh overruns the buffer: the sensor
+    ///   hardfaults (DEV-621, fixed in v1.00.050). A 1-byte CRC makes six, which fits. The firmware
+    ///   pushes on dock and undock, the user button, a trial-duration expiry and a low-battery stop,
+    ///   so the overrun can come at any point in a session.
+    /// - **v1.00.010 and earlier carry none.** They turn the CRC off by themselves whenever sensing
+    ///   stops, without telling the host (`S4Sens_stopSensing`, shimmer3r-firmware
+    ///   `S3R_Production/S4_App/s4_sensing.c` at v1.00.010). Every reply after a stop is then bare,
+    ///   while this class still expects a CRC on it.
+    ///
+    /// The hardware is checked first because Shimmer3 and Shimmer3R LogAndStream version numbers
+    /// overlap, and no Shimmer3 release has either problem. No CRC is safe until both versions have
+    /// been read (they are -1 until then); the protocol document likewise puts SET_CRC_COMMAND after
+    /// the version reads (log-and-stream-common `docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md` §8.2).
+    static func strongestSafeCRCMode(hardwareVersion: Int, firmwareIdentifier: Int, firmwareMajor: Int, firmwareMinor: Int, firmwareInternal: Int) -> BTCRCMode {
+        if (hardwareVersion < 0 || firmwareIdentifier < 0){
+            return BTCRCMode.OFF
+        }
+        if (hardwareVersion != HardwareType.Shimmer3R.rawValue || firmwareIdentifier != FW_IDENTIFIER_LOGANDSTREAM){
+            return BTCRCMode.TWO_BYTE
+        }
+        let firmware = (firmwareMajor, firmwareMinor, firmwareInternal)
+        if (firmware < (1, 0, 11)){
+            return BTCRCMode.OFF
+        }
+        if (firmware >= (1, 0, 24) && firmware < (1, 0, 50)){
+            return BTCRCMode.ONE_BYTE
+        }
+        return BTCRCMode.TWO_BYTE
+    }
+
+    /// strongestSafeCRCMode for the versions this link has read.
+    private func strongestSafeCRCModeForDevice() -> BTCRCMode {
+        return Shimmer3Protocol.strongestSafeCRCMode(hardwareVersion: REV_HW_MAJOR, firmwareIdentifier: REV_FW_IDENTIFIER, firmwareMajor: REV_FW_MAJOR, firmwareMinor: REV_FW_MINOR, firmwareInternal: REV_FW_INTERNAL)
+    }
+
     public func sendReadShimmerVersionCommand() async -> Bool?{
         let bytes:[UInt8] = [PacketTypeShimmer.getShimmerVersionCommand.rawValue]
         commandSent = PacketTypeShimmer.getShimmerVersionCommand
