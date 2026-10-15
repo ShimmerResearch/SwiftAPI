@@ -18,12 +18,14 @@
 		3A780C8A2AE12BEB00EAF050 /* ShimmerBluetooth.docc in Sources */ = {isa = PBXBuildFile; fileRef = 3A780C892AE12BEB00EAF050 /* ShimmerBluetooth.docc */; };
 		3A780C902AE12BEB00EAF050 /* ShimmerBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A780C852AE12BEB00EAF050 /* ShimmerBluetooth.framework */; };
 		3A780C952AE12BEB00EAF050 /* ShimmerBluetoothTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780C942AE12BEB00EAF050 /* ShimmerBluetoothTests.swift */; };
+		DE11460D2C0100000000001D /* Shimmer3DeviceStatusTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE11460C2C0100000000001C /* Shimmer3DeviceStatusTest.swift */; };
 		3A780C962AE12BEB00EAF050 /* ShimmerBluetooth.h in Headers */ = {isa = PBXBuildFile; fileRef = 3A780C882AE12BEB00EAF050 /* ShimmerBluetooth.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		3A780CA12AE12C0100EAF050 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A780CA02AE12C0100EAF050 /* CoreBluetooth.framework */; };
 		3A780CDA2AE12D8300EAF050 /* VerisenseProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780CD92AE12D8300EAF050 /* VerisenseProtocol.swift */; };
 		3A7A7F242AE7753E001FD6BD /* ShimmerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7A7F232AE7753E001FD6BD /* ShimmerProtocol.swift */; };
 		3A7A7F262AE776FC001FD6BD /* ByteCommunication.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7A7F252AE776FC001FD6BD /* ByteCommunication.swift */; };
 		3A7A7F282AE77F0E001FD6BD /* Shimmer3Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7A7F272AE77F0E001FD6BD /* Shimmer3Protocol.swift */; };
+		DE11460B2C0100000000001B /* Shimmer3DeviceStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE11460A2C0100000000001A /* Shimmer3DeviceStatus.swift */; };
 		3AA359132AF34D89008AD334 /* Shimmer3InfoMem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA359122AF34D89008AD334 /* Shimmer3InfoMem.swift */; };
 		3AA359152AF37943008AD334 /* ConfigByteLayoutShimmer3.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA359142AF37943008AD334 /* ConfigByteLayoutShimmer3.swift */; };
 		3AB320E62B070830003D94F8 /* Sensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB320E52B070830003D94F8 /* Sensor.swift */; };
@@ -69,11 +71,13 @@
 		3A780C892AE12BEB00EAF050 /* ShimmerBluetooth.docc */ = {isa = PBXFileReference; lastKnownFileType = folder.documentationcatalog; path = ShimmerBluetooth.docc; sourceTree = "<group>"; };
 		3A780C8F2AE12BEB00EAF050 /* ShimmerBluetoothTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShimmerBluetoothTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3A780C942AE12BEB00EAF050 /* ShimmerBluetoothTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerBluetoothTests.swift; sourceTree = "<group>"; };
+		DE11460C2C0100000000001C /* Shimmer3DeviceStatusTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shimmer3DeviceStatusTest.swift; sourceTree = "<group>"; };
 		3A780CA02AE12C0100EAF050 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS17.0.sdk/System/Library/Frameworks/CoreBluetooth.framework; sourceTree = DEVELOPER_DIR; };
 		3A780CD92AE12D8300EAF050 /* VerisenseProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerisenseProtocol.swift; sourceTree = "<group>"; };
 		3A7A7F232AE7753E001FD6BD /* ShimmerProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerProtocol.swift; sourceTree = "<group>"; };
 		3A7A7F252AE776FC001FD6BD /* ByteCommunication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteCommunication.swift; sourceTree = "<group>"; };
 		3A7A7F272AE77F0E001FD6BD /* Shimmer3Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shimmer3Protocol.swift; sourceTree = "<group>"; };
+		DE11460A2C0100000000001A /* Shimmer3DeviceStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shimmer3DeviceStatus.swift; sourceTree = "<group>"; };
 		3AA359122AF34D89008AD334 /* Shimmer3InfoMem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shimmer3InfoMem.swift; sourceTree = "<group>"; };
 		3AA359142AF37943008AD334 /* ConfigByteLayoutShimmer3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigByteLayoutShimmer3.swift; sourceTree = "<group>"; };
 		3AB320E52B070830003D94F8 /* Sensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sensor.swift; sourceTree = "<group>"; };
@@ -147,6 +151,7 @@
 				3A77128C2AE177A4006213A8 /* ShimmerDevice.swift */,
 				3A77128E2AE177AF006213A8 /* Shimmer3.swift */,
 				3A7A7F272AE77F0E001FD6BD /* Shimmer3Protocol.swift */,
+				DE11460A2C0100000000001A /* Shimmer3DeviceStatus.swift */,
 				3A780CD92AE12D8300EAF050 /* VerisenseProtocol.swift */,
 				3A7A7F232AE7753E001FD6BD /* ShimmerProtocol.swift */,
 				3A7712902AE26805006213A8 /* BLEByteRadioold.swift */,
@@ -176,6 +181,7 @@
 			isa = PBXGroup;
 			children = (
 				3A780C942AE12BEB00EAF050 /* ShimmerBluetoothTests.swift */,
+				DE11460C2C0100000000001C /* Shimmer3DeviceStatusTest.swift */,
 				3AED206C2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift */,
 				3AD7C6022BD23238000E5455 /* SensorTest.swift */,
 			);
@@ -325,6 +331,7 @@
 				3AED20712B0C4BA60066A0F8 /* MagSensor.swift in Sources */,
 				3A7A7F242AE7753E001FD6BD /* ShimmerProtocol.swift in Sources */,
 				3A7A7F282AE77F0E001FD6BD /* Shimmer3Protocol.swift in Sources */,
+				DE11460B2C0100000000001B /* Shimmer3DeviceStatus.swift in Sources */,
 				92B4B5502DF035C100225A97 /* HighGAccelSensor.swift in Sources */,
 				3AEB12F92BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift in Sources */,
 				3AA359132AF34D89008AD334 /* Shimmer3InfoMem.swift in Sources */,
@@ -337,6 +344,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3AED206D2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift in Sources */,
+				DE11460D2C0100000000001D /* Shimmer3DeviceStatusTest.swift in Sources */,
 				3A780C952AE12BEB00EAF050 /* ShimmerBluetoothTests.swift in Sources */,
 				3AD7C6032BD23238000E5455 /* SensorTest.swift in Sources */,
 			);

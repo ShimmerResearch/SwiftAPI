@@ -278,4 +278,15 @@ class ShimmerUtilitiesTest: XCTestCase {
             }
         }
     
+    func testShimmerUartCrcCalcMatchesTheFirmwareReference() {
+        // [LSB, MSB] from log-and-stream-common Extras/python_scripts/Shimmer_common/shimmer_crc.py
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFF], 1), [0xF4, 0x65], "a bare ACK, odd length so padded")
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFE], 1), [0xC5, 0x56], "a bare NACK")
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFF, 0x8A, 0x71, 0x31], 4), [0xC5, 0xBA], "even length, not padded")
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFF, 0x8A, 0x71, 0x31, 0x01], 5), [0x1E, 0x4B])
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0x8A, 0x71, 0x31], 3), [0xE8, 0x7C])
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0x8A, 0x71, 0x31, 0x01], 4), [0xC9, 0x6C])
+        XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFF, 0x8A, 0x71, 0x52, 0xAA], 4), [0x00, 0xE6], "only the first len bytes count")
+    }
+
 }
