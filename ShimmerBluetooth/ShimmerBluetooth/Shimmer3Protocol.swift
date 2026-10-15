@@ -349,7 +349,17 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 if (REV_HW_MAJOR==HardwareType.Shimmer3.rawValue){
                     await sendBMP280PressureCalibCoefficientsCommand()
                 } else if (REV_HW_MAJOR==HardwareType.Shimmer3R.rawValue){
-                    await sendPressureCalibCoefficientsCommand()
+                    let pressureSensorIdReceived = await sendPressureCalibCoefficientsCommand() ?? false
+                    if (!pressureSensorIdReceived){
+                        // No usable 0xA6 reply: v1.01.006 refuses 0xA7 on a BMP581, so
+                        // fall back to the board SR number and firmware version.
+                        // Also taken for a malformed reply. A NACK only reaches here once
+                        // NACK handling resumes the command with a failure; until then it
+                        // leaves this await suspended.
+                        let sensorType = isShimmer3RwithBmp581() ? PressureTempSensor.PressureSensorType.BMP581 : PressureTempSensor.PressureSensorType.BMP390
+                        pressureTempSensor.pressureSensorType = sensorType
+                        print("Pressure sensor from SR number: \(sensorType)")
+                    }
                 }
                 
                 await sendInquiryCommand()
@@ -362,6 +372,19 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         return true
     }
     
+    /// True when a Shimmer3R's expansion board SR number and firmware version indicate
+    /// a BMP581. Used only when the device does not report its pressure sensor in-band.
+    public func isShimmer3RwithBmp581() -> Bool {
+        return PressureTempSensor.isBmp581PresentPerSrNumber(hardwareVersion: REV_HW_MAJOR,
+                                                             expansionBoardId: EXPANSION_BOARD_ID,
+                                                             expansionBoardRev: EXPANSION_BOARD_REV,
+                                                             expansionBoardRevSpecial: EXPANSION_BOARD_REV_SPECIAL)
+            && PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: REV_FW_IDENTIFIER,
+                                                              major: REV_FW_MAJOR,
+                                                              minor: REV_FW_MINOR,
+                                                              internalVersion: REV_FW_INTERNAL)
+    }
+
     func parseCalibrationDump(_ bytes:[UInt8]){
         let length = Int(bytes[0]) + (Int(bytes[1])<<8)
         var calibrationBytes = Array(bytes.prefix(length+2))
@@ -971,23 +994,28 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                             //self.receivedBytes.removeAll()
                             
                         } else if (self.commandSent == PacketTypeShimmer.getpressureCalibrationCoefficientsCommand) {
-                            if self.receivedBytes[1] == PacketTypeShimmer.pressureCalibrationCoefficientsResponse.rawValue {
+                            if self.receivedBytes.count > 2 && self.receivedBytes[1] == PacketTypeShimmer.pressureCalibrationCoefficientsResponse.rawValue {
 
-                                // Remove ACK + response type
-                                var data = self.receivedBytes
-                                data.removeFirst(2)
+                                // [ACK][0xA6][len = 1 + n][sensorId][n coefficient bytes][CRC]
+                                // Wait for the whole reply so its length can be checked against the sensor ID
+                                let length = 1 + 1 + 1 + Int(self.receivedBytes[2]) + Int(self.CRCMode.rawValue)
+                                if self.receivedBytes.count >= length {
+                                    // Remove ACK + response type
+                                    var data = Array(self.receivedBytes.prefix(length))
+                                    data.removeFirst(2)
 
-                                // Remove CRC
-                                if self.CRCMode != .OFF {
-                                    data.removeLast(Int(self.CRCMode.rawValue))
+                                    // Remove CRC
+                                    if self.CRCMode != .OFF {
+                                        data.removeLast(Int(self.CRCMode.rawValue))
+                                    }
+
+                                    // Sets the sensor type; parses the coefficients for a BMP390
+                                    let valid = self.pressureTempSensor.applyPressureCalibrationResponse(data)
+
+                                    self.continuation?.resume(returning: valid)
+                                    self.continuation = nil
+                                    self.receivedBytes.removeAll()
                                 }
-
-                                // Forward to same PressureTempSensor
-                                self.pressureTempSensor.parseCalParamByteArray(pressureResoRes: data)
-
-                                self.continuation?.resume(returning: true)
-                                self.continuation = nil
-                                self.receivedBytes.removeAll()
                             }
                         }
                         else if (self.commandSent == PacketTypeShimmer.setSensorsCommand) {

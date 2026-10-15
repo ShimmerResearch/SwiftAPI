@@ -96,6 +96,149 @@ class SensorTest: XCTestCase {
         pressureResolution = (Int(infompressuretemp[ConfigByteLayoutShimmer3.idxConfigSetupByte3]>>ConfigByteLayoutShimmer3.bitShiftBMPX80PressureResolution) & ConfigByteLayoutShimmer3.maskBMPX80PressureResolution)
         XCTAssertEqual(pressureResolution, 3, "Failed to set pressure resolution")
     }
+
+    // BMP581 conversion vectors shared by every host API: pressure is unsigned, temperature is signed 24-bit
+    func testBMP581Conversion(){
+        var (pressurePa, temperatureC) = PressureTempSensor.calibratePressure581(rawP: 6400000, rawT: 1638400)
+        XCTAssertEqual(pressurePa / 1000.0, 100.0, accuracy: 1e-9, "Failed BMP581 pressure")
+        XCTAssertEqual(temperatureC, 25.0, accuracy: 1e-9, "Failed BMP581 temperature")
+
+        (pressurePa, temperatureC) = PressureTempSensor.calibratePressure581(rawP: 0xFFFFFF, rawT: 1600000)
+        XCTAssertEqual(pressurePa / 1000.0, 262.143984375, accuracy: 1e-9, "Failed BMP581 full-scale pressure")
+        XCTAssertEqual(temperatureC, 24.4140625, accuracy: 1e-9, "Failed BMP581 temperature")
+
+        XCTAssertEqual(PressureTempSensor.calibratePressure581(rawP: 0, rawT: 0x7FFFFF).1, 127.9999847, accuracy: 1e-7, "Failed BMP581 maximum temperature")
+        XCTAssertEqual(PressureTempSensor.calibratePressure581(rawP: 0, rawT: 0xFFFFFF).1, -1.0 / 65536.0, accuracy: 1e-12, "Failed BMP581 temperature just below zero")
+        // DEV-1102: wire bytes 56 55 FE read as ~254 degC when the temperature was decoded unsigned
+        XCTAssertEqual(PressureTempSensor.calibratePressure581(rawP: 0, rawT: 0xFE5556).1, -1.6666565, accuracy: 1e-7, "Failed BMP581 sub-zero temperature")
+        XCTAssertEqual(PressureTempSensor.calibratePressure581(rawP: 0, rawT: 0x800000).1, -128.0, accuracy: 1e-12, "Failed BMP581 minimum temperature")
+
+        // Masked before extending, so an already-signed value passes through unchanged
+        XCTAssertEqual(PressureTempSensor.signExtend24(-109226), -109226, "Failed sign extension of a signed value")
+        XCTAssertEqual(PressureTempSensor.signExtend24(0xFE5556), -109226, "Failed sign extension")
+    }
+
+    func testBMP581ProcessData(){
+        var pressTempSensor: PressureTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        pressTempSensor.pressureSensorType = PressureTempSensor.PressureSensorType.BMP581
+        // Channel order [0x1B pressure, 0x1A temperature], each 3 bytes little-endian
+        pressTempSensor.packetIndexPressure = 0
+        pressTempSensor.packetIndexTemp = 3
+        var objectCluster = pressTempSensor.processData(sensorPacket: [0x00, 0xA8, 0x61, 0x00, 0x00, 0x19], objectCluster: ObjectCluster(deviceName: "test"))
+
+        let pressureName = [PressureTempSensor.PRESSURE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.kpascal.rawValue].joined(separator: "_")
+        let temperatureName = [PressureTempSensor.TEMPERATURE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.degreescelcius.rawValue].joined(separator: "_")
+        let rawPressureName = [PressureTempSensor.PRESSURE, Sensor.SensorFormats.Raw.rawValue, Sensor.SensorUnits.noUnit.rawValue].joined(separator: "_")
+        XCTAssertEqual(objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: pressureName)!], 100.0, accuracy: 1e-9, "Failed BMP581 pressure")
+        XCTAssertEqual(objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: temperatureName)!], 25.0, accuracy: 1e-9, "Failed BMP581 temperature")
+        XCTAssertEqual(objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: rawPressureName)!], 6400000.0, "Failed BMP581 raw pressure")
+
+        // Sub-zero temperature, wire bytes 56 55 FE
+        objectCluster = pressTempSensor.processData(sensorPacket: [0x00, 0xA8, 0x61, 0x56, 0x55, 0xFE], objectCluster: ObjectCluster(deviceName: "test"))
+        XCTAssertEqual(objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: temperatureName)!], -1.6666565, accuracy: 1e-7, "Failed BMP581 sub-zero temperature")
+    }
+
+    // Body of the 0xA6 reply to 0xA7, after the ACK and response byte: [len = 1 + n][sensorId][n coefficient bytes]
+    func testPressureCalibrationResponse(){
+        var decoded = PressureTempSensor.decodePressureCalibrationResponse([0x01, 0x03])
+        XCTAssertEqual(decoded?.sensorType, PressureTempSensor.PressureSensorType.BMP581, "Failed to decode BMP581")
+        XCTAssertEqual(decoded?.coefficients.count, 0, "BMP581 has no coefficients")
+
+        // A length that does not match the sensor ID is rejected
+        XCTAssertNil(PressureTempSensor.decodePressureCalibrationResponse([0x04, 0x03, 0x11, 0x22, 0x33]), "Accepted a BMP581 reply with coefficients")
+        XCTAssertNil(PressureTempSensor.decodePressureCalibrationResponse([0x01, 0x02]), "Accepted a BMP390 reply without coefficients")
+        XCTAssertNil(PressureTempSensor.decodePressureCalibrationResponse([0x01, 0x04]), "Accepted an unknown sensor ID")
+        XCTAssertNil(PressureTempSensor.decodePressureCalibrationResponse([0x01]), "Accepted a truncated reply")
+
+        let bmp390Coefficients: [UInt8] = [0x6B, 0x6A, 0x8E, 0x49, 0xF8, 0x7F, 0xF5, 0xA2, 0x05, 0x19, 0x05, 0x68, 0x44, 0x36, 0x61, 0xFC, 0x07, 0x3A, 0xF3, 0xB8, 0x0E]
+        let bmp390Payload: [UInt8] = [0x16, 0x02] + bmp390Coefficients
+        decoded = PressureTempSensor.decodePressureCalibrationResponse(bmp390Payload)
+        XCTAssertEqual(decoded?.sensorType, PressureTempSensor.PressureSensorType.BMP390, "Failed to decode BMP390")
+        XCTAssertEqual(decoded?.coefficients ?? [], bmp390Coefficients, "Failed to decode BMP390 coefficients")
+        XCTAssertNil(PressureTempSensor.decodePressureCalibrationResponse(Array(bmp390Payload.dropLast())), "Accepted a short BMP390 reply")
+
+        // The BMP581 reply sets the type and leaves the coefficients alone
+        var pressTempSensor: PressureTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        XCTAssertTrue(pressTempSensor.applyPressureCalibrationResponse([0x01, 0x03]), "Rejected a BMP581 reply")
+        XCTAssertEqual(pressTempSensor.pressureSensorType, PressureTempSensor.PressureSensorType.BMP581, "Failed to set BMP581")
+        XCTAssertEqual(pressTempSensor.par_T1, 0, "BMP581 reply changed the coefficients")
+        XCTAssertFalse(pressTempSensor.applyPressureCalibrationResponse([0x04, 0x03, 0x11, 0x22, 0x33]), "Accepted a malformed reply")
+        XCTAssertEqual(pressTempSensor.pressureSensorType, PressureTempSensor.PressureSensorType.BMP581, "A malformed reply changed the sensor type")
+
+        // The BMP390 reply parses the coefficients exactly as before
+        pressTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        let reference: PressureTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        reference.parseCalParamByteArray(pressureResoRes: bmp390Payload)
+        XCTAssertTrue(pressTempSensor.applyPressureCalibrationResponse(bmp390Payload), "Rejected a BMP390 reply")
+        XCTAssertEqual(pressTempSensor.pressureSensorType, PressureTempSensor.PressureSensorType.BMP390, "Failed to set BMP390")
+        XCTAssertEqual(pressTempSensor.par_T1, reference.par_T1, "Failed BMP390 coefficients")
+        XCTAssertEqual(pressTempSensor.par_P5, reference.par_P5, "Failed BMP390 coefficients")
+        XCTAssertEqual(pressTempSensor.par_P11, reference.par_P11, "Failed BMP390 coefficients")
+        let (pressure, temperature) = pressTempSensor.calibratePressure390(UP: 6400000, UT: 8400000)
+        let (referencePressure, referenceTemperature) = reference.calibratePressure390(UP: 6400000, UT: 8400000)
+        XCTAssertEqual(pressure, referencePressure, "Failed BMP390 pressure")
+        XCTAssertEqual(temperature, referenceTemperature, "Failed BMP390 temperature")
+    }
+
+    // Cases copied from the firmware's test_bmp581_gate (log-and-stream-common Test/host/test_boards.c)
+    func testBMP581SrNumberRule(){
+        let imu = Shimmer3Protocol.ExpansionBoardDetectShimmer3.SHIMMER3.rawValue
+        let proto3Deluxe = Shimmer3Protocol.ExpansionBoardDetectShimmer3.EXPANSION_PROTO3_DELUXE.rawValue
+        let exg = Shimmer3Protocol.ExpansionBoardDetectShimmer3.EXP_BRD_EXG_UNIFIED.rawValue
+        let brAmp = Shimmer3Protocol.ExpansionBoardDetectShimmer3.EXP_BRD_BR_AMP_UNIFIED.rawValue
+        let gsr = Shimmer3Protocol.ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED.rawValue
+        let proto3Mini = Shimmer3Protocol.ExpansionBoardDetectShimmer3.EXPANSION_PROTO3_MINI.rawValue
+        let cases: [(Int, Int, Int, Bool)] = [
+            (imu, 11, 1, false), (imu, 11, 2, true), (imu, 11, 3, true), (imu, 12, 0, true), (imu, 10, 9, false),
+            (proto3Deluxe, 4, 1, false), (proto3Deluxe, 4, 2, true), (proto3Deluxe, 5, 0, true),
+            (exg, 7, 2, false), (exg, 8, 1, false), (exg, 8, 2, true), (exg, 9, 0, true),
+            (brAmp, 4, 1, false), (brAmp, 4, 2, true),
+            (gsr, 6, 0, false), (gsr, 7, 0, false), (gsr, 7, 1, false), (gsr, 7, 2, true), (gsr, 7, 3, true),
+            (gsr, 8, 0, false), (gsr, 8, 1, false), (gsr, 8, 2, true), (gsr, 8, 3, true), (gsr, 9, 0, true),
+            (proto3Mini, 9, 9, false)
+        ]
+        for (srId, rev, revSpecial, expected) in cases {
+            XCTAssertEqual(PressureTempSensor.isBmp581PresentPerSrNumber(hardwareVersion: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue, expansionBoardId: srId, expansionBoardRev: rev, expansionBoardRevSpecial: revSpecial), expected, "SR\(srId)-\(rev).\(revSpecial)")
+        }
+
+        // Shimmer3R only: the same daughter card on a Shimmer3 never reports a BMP581
+        XCTAssertFalse(PressureTempSensor.isBmp581PresentPerSrNumber(hardwareVersion: Shimmer3Protocol.HardwareType.Shimmer3.rawValue, expansionBoardId: gsr, expansionBoardRev: 8, expansionBoardRevSpecial: 2), "A Shimmer3 reported a BMP581")
+        // An unprogrammed card must not either
+        XCTAssertFalse(PressureTempSensor.isBmp581PresentPerSrNumber(hardwareVersion: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue, expansionBoardId: 0xFF, expansionBoardRev: 0xFF, expansionBoardRevSpecial: 0xFF), "An unprogrammed card reported a BMP581")
+
+        // LogAndStream (firmware identifier 3) v1.01.006 onwards
+        XCTAssertFalse(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 3, major: 1, minor: 1, internalVersion: 5), "v1.01.005 has no BMP581 support")
+        XCTAssertTrue(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 3, major: 1, minor: 1, internalVersion: 6), "Failed v1.01.006")
+        XCTAssertTrue(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 3, major: 1, minor: 2, internalVersion: 0), "Failed v1.02.000")
+        XCTAssertTrue(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 3, major: 2, minor: 0, internalVersion: 0), "Failed v2.00.000")
+        XCTAssertFalse(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 3, major: 0, minor: 16, internalVersion: 0), "v0.16.000 has no BMP581 support")
+        XCTAssertFalse(PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: 1, major: 1, minor: 1, internalVersion: 6), "Not LogAndStream")
+    }
+
+    func testBMP581PressureResolution(){
+        var infomem = [UInt8](repeating: 0, count: 384)
+        infomem[ConfigByteLayoutShimmer3.idxConfigSetupByte3] = 0x30
+        infomem[ConfigByteLayoutShimmer3.idxConfigSetupByte4] = 0x01
+        XCTAssertEqual(ConfigByteLayoutShimmer3.idxConfigSetupByte4, 130, "ConfigSetupByte4 moved")
+
+        var pressTempSensor: PressureTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        pressTempSensor.setInfoMom(infomem: infomem)
+        XCTAssertEqual(pressTempSensor.getPressureResolutionIndex(), 7, "Failed to read the 3-bit pressure resolution")
+        XCTAssertEqual(PressureTempSensor.ListOfPressureResolutionBMP581[pressTempSensor.getPressureResolutionIndex()], "Highest Res", "Failed BMP581 resolution label")
+
+        infomem[ConfigByteLayoutShimmer3.idxConfigSetupByte3] = 0x10
+        pressTempSensor.setInfoMom(infomem: infomem)
+        XCTAssertEqual(pressTempSensor.getPressureResolutionIndex(), 5, "Failed to read the 3-bit pressure resolution")
+        XCTAssertEqual(PressureTempSensor.ListOfPressureResolutionBMP581[pressTempSensor.getPressureResolutionIndex()], "Very High Res", "Failed BMP581 resolution label")
+
+        XCTAssertEqual(PressureTempSensor.ListOfPressureResolutionBMP581, ["Lowest Power", "Low", "Standard", "High", "High Res", "Very High Res", "Ultra High Res", "Highest Res"], "Failed BMP581 resolution labels")
+
+        // A Shimmer3 has a 2-bit setting and ignores ConfigSetupByte4
+        pressTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3.rawValue)
+        pressTempSensor.setInfoMom(infomem: infomem)
+        XCTAssertEqual(pressTempSensor.getPressureResolutionIndex(), 1, "Shimmer3 read ConfigSetupByte4")
+    }
+
     func testSensorEcgRespGain(){
         var exgSensor: EXGSensor = EXGSensor()
         var infomexg:[UInt8] = [0x80, 0x02, 0x01, 0x00, 0x00, 0x18, 0x01, 0xFF, 0x01, 0x09, 0x00, 0xA8, 0x10, 0x40, 0x40, 0x2D, 0x00, 0x00, 0x02, 0x03, 0x00, 0xA0, 0x10, 0x40, 0x47, 0x00, 0x00, 0x00, 0x02, 0x01, 0x09, 0x00, 0x00, 0x00, 0x08, 0xCD, 0x08, 0xCD, 0x08, 0xCD, 0x00, 0x5C, 0x00, 0x5C, 0x00, 0x5C, 0x00, 0x9C, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x96, 0x19, 0x96, 0x19, 0x96, 0x00, 0x9C, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x9B, 0x02, 0x9B, 0x02, 0x9B, 0x00, 0x9C, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x87, 0x06, 0x87, 0x06, 0x87, 0x00, 0x9C, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
