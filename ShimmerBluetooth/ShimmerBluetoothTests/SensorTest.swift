@@ -485,4 +485,28 @@ class SensorTest: XCTestCase {
         let name = [GSRSensor.GSR_SKIN_RESISTANCE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.kiloOhms.rawValue].joined(separator: "_")
         return objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: name)!]
     }
+
+    // DEV-1338: channels 0x14-0x16 are a left-justified 12-bit value on a
+    // Shimmer3R and a plain big-endian int16 on a Shimmer3.
+    func testSensorHighGAccelDecodePerGeneration(){
+        // Shimmer3R: resting ADXL371 counts 1, -5, -10, each shifted left 4 and sent MSB first.
+        XCTAssertEqual(highGAccelRaw(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue,
+                                     packet: [0x00, 0x10, 0xFF, 0xB0, 0xFF, 0x60]), [1, -5, -10])
+        // Shimmer3: -300, 1234, -16384 as big-endian int16. The 12-bit decode read -19, 77, -1024.
+        XCTAssertEqual(highGAccelRaw(hwid: Shimmer3Protocol.HardwareType.Shimmer3.rawValue,
+                                     packet: [0xFE, 0xD4, 0x04, 0xD2, 0xC0, 0x00]), [-300, 1234, -16384])
+    }
+
+    private func highGAccelRaw(hwid: Int, packet: [UInt8]) -> [Double] {
+        let sensor = HighGAccelSensor(hwid: hwid)
+        sensor.calibrationEnabled = false
+        sensor.packetIndexHighGAccelX = 0
+        sensor.packetIndexHighGAccelY = 2
+        sensor.packetIndexHighGAccelZ = 4
+        let objectCluster = sensor.processData(sensorPacket: packet, objectCluster: ObjectCluster(deviceName: "test"))
+        return [HighGAccelSensor.HIGHG_ACCEL_X, HighGAccelSensor.HIGHG_ACCEL_Y, HighGAccelSensor.HIGHG_ACCEL_Z].map { axis in
+            let name = [axis, Sensor.SensorFormats.Raw.rawValue, Sensor.SensorUnits.meterPerSecondSquared.rawValue].joined(separator: "_")
+            return objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: name)!]
+        }
+    }
 }
