@@ -671,10 +671,14 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     
     // Start the processing loop
     func startProcessing() {
-        self.receivedBytes.removeAll()
+        queue.sync(flags: .barrier) { self.receivedBytes.removeAll() }
         self.processing = true
         processingQueue.async {
             while self.processing {
+                // Each pass holds `queue` exclusively, as processData's append does, so the buffer
+                // is never read here while it is being appended to on the Bluetooth thread.
+                // Unsynchronized, the two corrupted the array (SIGABRT mid-stream).
+                self.queue.sync(flags: .barrier) {
                 if (self.processStatusPushAtHead()){
                     /* An unsolicited status push, consumed if it has all arrived and otherwise
                      * held until it has. It is neither a reply nor a data packet, so neither
@@ -1138,9 +1142,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }
                     }
                 }
-                
-                    
-                    
+                }
+
+
+
                     /*
                     self.queue.sync {
                         if self.receivedBytes.count>0{
