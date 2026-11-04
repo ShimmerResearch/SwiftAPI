@@ -45,6 +45,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     public var EXPANSION_BOARD_REV: Int = -1
     
     public var EXPANSION_BOARD_REV_SPECIAL: Int = -1
+    /// The Bluetooth radio's own version string, as sendReadBtFwVersionCommand() read it, e.g.
+    /// "RN4678 V1.23 06/30/2021 (c)Microchip Technology Inc" or "CYW20820 app=v01.04.16.16".
+    /// Empty until read. ShimmerUtilities.btModuleDisplayName gives the short form.
+    public private(set) var btModuleVersion: String = ""
     public var internalExpPower:Int = -1
     public var lnAccelSensor: LNAccelSensor = LNAccelSensor(hwid: HardwareType.UNKNOWN.rawValue)
     public var wrAccelSensor: WRAccelSensor = WRAccelSensor(hwid: HardwareType.UNKNOWN.rawValue)
@@ -1098,6 +1102,29 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                 }
                             }
                         }
+                        else if (self.commandSent == PacketTypeShimmer.getBtFwVersionStrCommand) {
+                            if self.receivedBytes.count > 2 && self.receivedBytes[1] == PacketTypeShimmer.btFwVersionStrResponse.rawValue {
+                                // [ACK][0xA2][len][len bytes of version text][CRC]. Longer than one BLE
+                                // notification, so wait for all of it.
+                                let length = 1 + 1 + 1 + Int(self.receivedBytes[2]) + Int(self.CRCMode.rawValue)
+                                if self.receivedBytes.count >= length {
+                                    let received = Array(self.receivedBytes.prefix(length))
+                                    self.receivedBytes.removeFirst(length)
+                                    var crcresult = true
+                                    if self.CRCMode != BTCRCMode.OFF {
+                                        crcresult = self.checkCrc(received, received.count - Int(self.CRCMode.rawValue))
+                                    }
+                                    if crcresult {
+                                        self.btModuleVersion = String(decoding: received[3..<(length - Int(self.CRCMode.rawValue))], as: UTF8.self)
+                                        print("BT module version: \(self.btModuleVersion)")
+                                    } else {
+                                        print("[CRC ERROR] : \(self.commandSent!)")
+                                    }
+                                    self.continuation?.resume(returning: crcresult)
+                                    self.continuation = nil
+                                }
+                            }
+                        }
                         else if (self.commandSent == PacketTypeShimmer.setSensorsCommand) {
                             print("Set Sensors Command ACK Received")
 
@@ -1815,6 +1842,19 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
     }
     
+    /// Reads the Bluetooth radio's version string into btModuleVersion (0xA1, reply 0xA2).
+    /// Supported from Shimmer3 LogAndStream v0.13.7 and on every Shimmer3R; older firmware NACKs.
+    public func sendReadBtFwVersionCommand() async -> Bool?{
+        let bytes: [UInt8] = [PacketTypeShimmer.getBtFwVersionStrCommand.rawValue]
+        commandSent = PacketTypeShimmer.getBtFwVersionStrCommand
+        radio!.writeBytes(bytes: bytes)
+        return await withCheckedContinuation { continuation in
+            if self.continuation == nil {
+                self.continuation = continuation
+            }
+        }
+    }
+
     private func sendPressureCalibCoefficientsCommand() async -> Bool?{
         let bytes: [UInt8] = [PacketTypeShimmer.getpressureCalibrationCoefficientsCommand.rawValue]
         commandSent = PacketTypeShimmer.getpressureCalibrationCoefficientsCommand
@@ -2337,6 +2377,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case bmp280CalibrationCoefficientsResponse = 0x9F
         case getpressureCalibrationCoefficientsCommand = 0xA7
         case pressureCalibrationCoefficientsResponse = 0xA6
+        case getBtFwVersionStrCommand = 0xA1
+        case btFwVersionStrResponse = 0xA2
         case setExgRegsCommand = 0x61
         case exgRegsResponse = 0x62
         case getExgRegsCommand = 0x63
