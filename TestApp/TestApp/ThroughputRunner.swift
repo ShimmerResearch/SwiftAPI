@@ -226,7 +226,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     static func csv(_ rows: [ThroughputRow]) -> String {
         let head = "device,hw,fw,radio,exp_board,app,ios,config,crc,rate_hz,seconds,run,attempts,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
         let lines = rows.map { r in
-            [r.device, r.hw, r.fw, r.radio, r.expBoard, r.app, r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
+            [r.device, r.hw, r.fw, "\"\(r.radio)\"", r.expBoard, r.app, r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
              "\(r.packetBytes)", "\(r.expectedPacketBytes)", "\(r.received)", "\(r.expected)",
              String(format: "%.1f", r.prrApi), String(format: "%.1f", r.prrRaw), String(format: "%.1f", r.wallSeconds), r.status].joined(separator: ",")
         }

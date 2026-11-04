@@ -224,11 +224,13 @@ public class ShimmerUtilities{
     public static func btModuleDisplayName(_ version: String) -> String {
         let s = version.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
         let words = s.split(separator: " ")
+        // Only the version's digits and dots: the IF820 follows it with a comma.
+        func versionDigits(_ w: Substring) -> Substring { w.prefix(while: { $0.isNumber || $0 == "." }) }
         if words.count >= 2, words[0] == "RN4678", words[1].hasPrefix("V") {
-            return "RN4678 v\(words[1].dropFirst())"
+            return "RN4678 v\(versionDigits(words[1].dropFirst()))"
         }
         if words.count >= 2, words[0] == "CYW20820", words[1].hasPrefix("app=v") {
-            return "IF820 v\(words[1].dropFirst("app=v".count))"
+            return "IF820 v\(versionDigits(words[1].dropFirst("app=v".count)))"
         }
         return s
     }
