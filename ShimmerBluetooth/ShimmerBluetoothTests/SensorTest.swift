@@ -178,6 +178,85 @@ class SensorTest: XCTestCase {
         let (referencePressure, referenceTemperature) = reference.calibratePressure390(UP: 6400000, UT: 8400000)
         XCTAssertEqual(pressure, referencePressure, "Failed BMP390 pressure")
         XCTAssertEqual(temperature, referenceTemperature, "Failed BMP390 temperature")
+
+        // A Shimmer3R carries a BMP390 or BMP581: a BMP180 or BMP280 ID is refused, as the Java driver does
+        pressTempSensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+        XCTAssertFalse(pressTempSensor.applyPressureCalibrationResponse([0x17, 0x00] + [UInt8](repeating: 0x11, count: 22)), "A Shimmer3R accepted a BMP180")
+        XCTAssertFalse(pressTempSensor.applyPressureCalibrationResponse([0x19, 0x01] + [UInt8](repeating: 0x11, count: 24)), "A Shimmer3R accepted a BMP280")
+        XCTAssertNil(pressTempSensor.pressureSensorType, "A refused reply set the sensor type")
+    }
+
+    // As the Java driver's readPressureCalibrationCoefficients(): v1.01.006 NACKs 0xA7 on a BMP581, so it is not asked there
+    func testReadsPressureCalibrationCoefficients(){
+        let cases: [(Bool, Int, Int, Int, Int, Bool)] = [
+            // (BMP581 by SR number, firmware identifier, major, minor, internal, sends 0xA7)
+            (true, 3, 1, 1, 6, false),
+            (true, 3, 1, 1, 7, true),
+            (true, 3, 1, 2, 0, true),
+            (true, 3, 2, 0, 0, true),
+            (false, 3, 1, 1, 6, true),
+            (false, 3, 1, 1, 5, true),
+            (false, 3, 0, 16, 0, true),
+            (false, 1, 1, 1, 6, true)
+        ]
+        for (isBmp581, firmwareIdentifier, major, minor, internalVersion, expected) in cases {
+            XCTAssertEqual(PressureTempSensor.readsPressureCalibrationCoefficients(isBmp581PerSrNumber: isBmp581, firmwareIdentifier: firmwareIdentifier, major: major, minor: minor, internalVersion: internalVersion), expected, "BMP581 \(isBmp581), firmware \(firmwareIdentifier) v\(major).\(minor).\(internalVersion)")
+        }
+    }
+
+    // DEV-1125 in the Java driver: a BMP390 without coefficients reports NaN rather than invented values
+    func testBMP390WithoutCoefficients(){
+        let pressureName = [PressureTempSensor.PRESSURE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.kpascal.rawValue].joined(separator: "_")
+        let temperatureName = [PressureTempSensor.TEMPERATURE, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.degreescelcius.rawValue].joined(separator: "_")
+        let rawPressureName = [PressureTempSensor.PRESSURE, Sensor.SensorFormats.Raw.rawValue, Sensor.SensorUnits.noUnit.rawValue].joined(separator: "_")
+        // Channel order [0x1B pressure, 0x1A temperature], each 3 bytes little-endian: P 6400000, T 8400000
+        let packet: [UInt8] = [0x00, 0xA8, 0x61, 0x80, 0x2C, 0x80]
+        func calibrated(_ sensor: PressureTempSensor) -> (Double, Double, Double) {
+            let objectCluster = sensor.processData(sensorPacket: packet, objectCluster: ObjectCluster(deviceName: "test"))
+            return (objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: pressureName)!],
+                    objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: temperatureName)!],
+                    objectCluster.SignalData[objectCluster.SignalNames.firstIndex(of: rawPressureName)!])
+        }
+        func newSensor() -> PressureTempSensor {
+            let sensor = PressureTempSensor(hwid: Shimmer3Protocol.HardwareType.Shimmer3R.rawValue)
+            sensor.packetIndexPressure = 0
+            sensor.packetIndexTemp = 3
+            return sensor
+        }
+
+        // Sampled before any 0xA6 reply
+        var pressTempSensor = newSensor()
+        var (pressure, temperature, rawPressure) = calibrated(pressTempSensor)
+        XCTAssertTrue(pressure.isNaN, "Calibrated pressure without coefficients")
+        XCTAssertTrue(temperature.isNaN, "Calibrated temperature without coefficients")
+        XCTAssertEqual(rawPressure, 6400000.0, "Raw pressure lost without coefficients")
+
+        // A BMP390 assumed from the SR number after 0xA7 got no usable reply
+        pressTempSensor.pressureSensorType = PressureTempSensor.PressureSensorType.BMP390
+        (pressure, temperature, _) = calibrated(pressTempSensor)
+        XCTAssertTrue(pressure.isNaN && temperature.isNaN, "Calibrated a BMP390 assumed from the SR number")
+
+        // An all-0x00 or all-0xFF block is a valid reply that holds no coefficients
+        for fill: UInt8 in [0x00, 0xFF] {
+            pressTempSensor = newSensor()
+            XCTAssertTrue(pressTempSensor.applyPressureCalibrationResponse([0x16, 0x02] + [UInt8](repeating: fill, count: 21)), "Rejected a BMP390 reply")
+            XCTAssertEqual(pressTempSensor.pressureSensorType, PressureTempSensor.PressureSensorType.BMP390, "Failed to set BMP390")
+            XCTAssertFalse(pressTempSensor.hasBmp390Coefficients, "Kept an all-\(fill) block as coefficients")
+            (pressure, temperature, _) = calibrated(pressTempSensor)
+            XCTAssertTrue(pressure.isNaN && temperature.isNaN, "Calibrated from an all-\(fill) block")
+        }
+
+        // Real coefficients calibrate exactly as calibratePressure390
+        let bmp390Payload: [UInt8] = [0x16, 0x02, 0x6B, 0x6A, 0x8E, 0x49, 0xF8, 0x7F, 0xF5, 0xA2, 0x05, 0x19, 0x05, 0x68, 0x44, 0x36, 0x61, 0xFC, 0x07, 0x3A, 0xF3, 0xB8, 0x0E]
+        pressTempSensor = newSensor()
+        XCTAssertTrue(pressTempSensor.applyPressureCalibrationResponse(bmp390Payload), "Rejected a BMP390 reply")
+        XCTAssertTrue(pressTempSensor.hasBmp390Coefficients, "Failed to keep the BMP390 coefficients")
+        (pressure, temperature, _) = calibrated(pressTempSensor)
+        let reference = newSensor()
+        reference.parseCalParamByteArray(pressureResoRes: bmp390Payload)
+        let (referencePressure, referenceTemperature) = reference.calibratePressure390(UP: 6400000, UT: 8400000)
+        XCTAssertEqual(pressure, referencePressure / 1000.0, "Failed BMP390 pressure")
+        XCTAssertEqual(temperature, referenceTemperature, "Failed BMP390 temperature")
     }
 
     // Cases copied from the firmware's test_bmp581_gate (log-and-stream-common Test/host/test_boards.c)
