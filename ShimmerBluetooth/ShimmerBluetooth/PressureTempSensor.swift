@@ -35,6 +35,38 @@ public class PressureTempSensor: Sensor , SensorProcessing{
             }
         }
         
+    /// The pressure sensor fitted. The raw values are the sensor IDs the firmware
+    /// sends in the 0xA6 reply to 0xA7 (PRESSURE_SENSOR_BMP180..BMP581).
+    public enum PressureSensorType: UInt8 {
+            case BMP180 = 0
+            case BMP280 = 1
+            case BMP390 = 2
+            case BMP581 = 3
+
+            /// Number of calibration coefficient bytes that follow the sensor ID in the 0xA6 reply.
+            public var calibrationByteCount: Int {
+                switch self {
+                case .BMP180:
+                    return 22
+                case .BMP280:
+                    return 24
+                case .BMP390:
+                    return 21
+                case .BMP581:
+                    return 0
+                }
+            }
+        }
+
+    /// Set from the 0xA6 reply, or from the SR-number rule when 0xA7 gets no usable reply.
+    /// nil (not yet known) keeps the BMP390 path on a Shimmer3R.
+    public var pressureSensorType: PressureSensorType? = nil
+
+    /// BMP581 oversampling settings, indexed by the 3-bit pressure resolution field.
+    public static let ListOfPressureResolutionBMP581 = ["Lowest Power", "Low", "Standard", "High", "High Res", "Very High Res", "Ultra High Res", "Highest Res"]
+
+    static let FW_ID_LOGANDSTREAM = 3
+
     var CurrentResolution = Resolution.RES_LOW
     var pressureResolution = 0
     public static let TEMPERATURE = "Temperature"
@@ -118,6 +150,23 @@ public class PressureTempSensor: Sensor , SensorProcessing{
                                   formatName: SensorFormats.Raw.rawValue,
                                   unitName: SensorUnits.noUnit.rawValue,
                                   value: Double(rawP))
+
+            if pressureSensorType == .BMP581 {
+                // The BMP581 outputs compensated values, so there are no coefficients to apply
+                let (pressurePa, temperatureC) = PressureTempSensor.calibratePressure581(rawP: Int(rawP),
+                                                                                        rawT: Int(rawT))
+
+                objectCluster.addData(sensorName: PressureTempSensor.TEMPERATURE,
+                                      formatName: SensorFormats.Calibrated.rawValue,
+                                      unitName: SensorUnits.degreescelcius.rawValue,
+                                      value: temperatureC)
+
+                objectCluster.addData(sensorName: PressureTempSensor.PRESSURE,
+                                      formatName: SensorFormats.Calibrated.rawValue,
+                                      unitName: SensorUnits.kpascal.rawValue,
+                                      value: pressurePa / 1000.0)
+                return objectCluster
+            }
 
             let (compPress, tLin) = calibratePressure390(UP: Double(rawP),
                                                          UT: Double(rawT))
@@ -294,6 +343,92 @@ public class PressureTempSensor: Sensor , SensorProcessing{
         }
     }
     
+    /// Decodes the body of a 0xA6 reply, [len = 1 + n][sensorId][n coefficient bytes],
+    /// with the ACK, response byte and CRC already removed.
+    /// Returns nil when the sensor ID is unknown or len does not match it.
+    public static func decodePressureCalibrationResponse(_ payload: [UInt8]) -> (sensorType: PressureSensorType, coefficients: [UInt8])? {
+        guard payload.count >= 2, let sensorType = PressureSensorType(rawValue: payload[1]) else {
+            return nil
+        }
+        let length = Int(payload[0])
+        guard length == 1 + sensorType.calibrationByteCount, payload.count >= 1 + length else {
+            return nil
+        }
+        return (sensorType, Array(payload[2..<(1 + length)]))
+    }
+
+    /// Stores the sensor type from a 0xA6 reply and parses its coefficients.
+    /// Returns false, changing nothing, when the reply is malformed.
+    public func applyPressureCalibrationResponse(_ payload: [UInt8]) -> Bool {
+        guard let decoded = PressureTempSensor.decodePressureCalibrationResponse(payload) else {
+            print("Invalid pressure calibration response: \(payload.map{ String(format: "%02X", $0) }.joined(separator: " "))")
+            return false
+        }
+        pressureSensorType = decoded.sensorType
+        print("Pressure sensor: \(decoded.sensorType)")
+        if decoded.sensorType == .BMP390 {
+            parseCalParamByteArray(pressureResoRes: payload)
+        }
+        // The BMP581 has no coefficients. BMP180/BMP280 coefficients are read with their own commands.
+        return true
+    }
+
+    /// True when the expansion board SR number is one that carries the BMP581 on a Shimmer3R,
+    /// following the firmware's ShimBrd_isBmp581PresentPerSrNumber(). ">=" compares rev, then special rev.
+    public static func isBmp581PresentPerSrNumber(hardwareVersion: Int, expansionBoardId: Int, expansionBoardRev: Int, expansionBoardRevSpecial: Int) -> Bool {
+        // An unprogrammed daughter card reads 0x00 or 0xFF
+        if hardwareVersion != Shimmer3Protocol.HardwareType.Shimmer3R.rawValue
+            || expansionBoardId == 0x00 || expansionBoardId == 0xFF {
+            return false
+        }
+        func isSrNumberGte(_ id: Shimmer3Protocol.ExpansionBoardDetectShimmer3, _ rev: Int, _ revSpecial: Int) -> Bool {
+            return expansionBoardId == id.rawValue
+                && (expansionBoardRev > rev || (expansionBoardRev == rev && expansionBoardRevSpecial >= revSpecial))
+        }
+        // SR48 has two BMP581 ranges, 7.2 to 7.x and 8.2 onwards: SR48-8.0 and 8.1 are BMP390
+        return isSrNumberGte(.SHIMMER3, 11, 2)
+            || isSrNumberGte(.EXPANSION_PROTO3_DELUXE, 4, 2)
+            || isSrNumberGte(.EXP_BRD_EXG_UNIFIED, 8, 2)
+            || (isSrNumberGte(.EXP_BRD_GSR_UNIFIED, 7, 2) && !isSrNumberGte(.EXP_BRD_GSR_UNIFIED, 8, 0))
+            || isSrNumberGte(.EXP_BRD_GSR_UNIFIED, 8, 2)
+            || isSrNumberGte(.EXP_BRD_BR_AMP_UNIFIED, 4, 2)
+    }
+
+    /// True for LogAndStream v1.01.006 onwards, the first firmware that can drive a BMP581.
+    public static func isBmp581SupportedByFirmware(firmwareIdentifier: Int, major: Int, minor: Int, internalVersion: Int) -> Bool {
+        if firmwareIdentifier != PressureTempSensor.FW_ID_LOGANDSTREAM {
+            return false
+        }
+        if major != 1 {
+            return major > 1
+        }
+        if minor != 1 {
+            return minor > 1
+        }
+        return internalVersion >= 6
+    }
+
+    /// BMP581 conversion: pressure is unsigned, Pa = raw / 64; temperature is signed, degC = raw / 65536.
+    /// Returns (Pa, degC). No clamp is applied.
+    public static func calibratePressure581(rawP: Int, rawT: Int) -> (Double, Double) {
+        let pressurePa = Double(rawP & 0xFFFFFF) / 64.0
+        let temperatureC = Double(signExtend24(rawT)) / 65536.0
+        return (pressurePa, temperatureC)
+    }
+
+    /// Reads a 24-bit field as two's complement. Masks to 24 bits first, so an
+    /// already sign-extended value passes through unchanged.
+    public static func signExtend24(_ raw: Int) -> Int {
+        let bits = raw & 0xFFFFFF
+        return (bits & 0x800000) != 0 ? bits - 0x1000000 : bits
+    }
+
+    /// The 3-bit pressure resolution (oversampling) setting read from InfoMem.
+    /// On a BMP581 it indexes ListOfPressureResolutionBMP581.
+    public func getPressureResolutionIndex() -> Int {
+        return pressureResolution
+    }
+
     public func updateInfoMemPressureResolution(infomem: [UInt8],res: Resolution) -> [UInt8]{
         var infomemtoupdate = infomem
         print("oriinfomem: \(infomemtoupdate)")
@@ -336,6 +471,11 @@ public class PressureTempSensor: Sensor , SensorProcessing{
             sensorEnabled = false
         }
         pressureResolution = (Int(infomem[ConfigByteLayoutShimmer3.idxConfigSetupByte3]>>ConfigByteLayoutShimmer3.bitShiftBMPX80PressureResolution) & ConfigByteLayoutShimmer3.maskBMPX80PressureResolution)
+        if (HardwareVersion == Shimmer3Protocol.HardwareType.Shimmer3R.rawValue && infomem.count > ConfigByteLayoutShimmer3.idxConfigSetupByte4){
+            // The BMP390/BMP581 setting is 3 bits: its MSB is ConfigSetupByte4 bit 0
+            let msb = Int(infomem[ConfigByteLayoutShimmer3.idxConfigSetupByte4]>>ConfigByteLayoutShimmer3.bitShiftBMP390PressureResolution) & ConfigByteLayoutShimmer3.maskBMP390PressureResolution
+            pressureResolution = pressureResolution | (msb << 2)
+        }
         
         if (pressureResolution == 0){
             CurrentResolution = Resolution.RES_LOW

@@ -52,6 +52,10 @@ class ViewModel: NSObject, ObservableObject {
     @Published var pressResolution = ["LOW", "STANDARD", "HIGH", "ULTRAHIGH"]
     @Published var samplingRate = ["1Hz", "10.2Hz", "51.2Hz", "102.4Hz", "204.8Hz", "256Hz", "512Hz", "1024Hz"]
     @Published var stateText = "Disconnected"
+    @Published var crcModes = ["Off", "1 Byte", "2 Byte"]
+    @Published var crcModeIndex = 2 // Initial value, matches the API default (TWO_BYTE)
+    @Published var currentCRCModeText = "-"
+    @Published var packetReceptionRate = -1
     @Published var ppgInputOptions = PPGInputOption.allCases.map(\.rawValue)
     @Published var ppgInputSelectionIndex = 0
     @Published var lnAccelEnabled = false
@@ -158,6 +162,7 @@ class ViewModel: NSObject, ObservableObject {
             shimmer3Protocol = Shimmer3Protocol(radio: self.radio!)
             shimmer3Protocol?.delegate = self
             await shimmer3Protocol?.connect()
+            refreshCRCModeText()
             refreshUISettings()
         } else {
             shimmer3SpeedTestProtocol = Shimmer3SpeedTestProtocol(radio: self.radio!)
@@ -167,6 +172,26 @@ class ViewModel: NSObject, ObservableObject {
         }
     
     }
+    private func selectedCRCMode() -> Shimmer3Protocol.BTCRCMode {
+        return Shimmer3Protocol.BTCRCMode(rawValue: UInt8(crcModeIndex)) ?? .TWO_BYTE
+    }
+    
+    func refreshCRCModeText() {
+        guard let mode = shimmer3Protocol?.getCRCMode() else {
+            currentCRCModeText = "-"
+            return
+        }
+        currentCRCModeText = crcModes[Int(mode.rawValue)]
+    }
+    
+    func setCRCModeDev2() async {
+        isSensorCommandInFlight = true
+        let ok = await shimmer3Protocol?.setCRCMode(selectedCRCMode()) ?? false
+        print("Set CRC mode \(selectedCRCMode()) result: \(ok)")
+        refreshCRCModeText()
+        isSensorCommandInFlight = false
+    }
+    
     func disconnectDev2() async{
         if (shimmer3Protocol==nil){
             await shimmer3SpeedTestProtocol!.disconnect()
@@ -577,6 +602,7 @@ extension ViewModel : ShimmerProtocolDelegate {
     func shimmerProtocolNewObjectCluster(message: ShimmerBluetooth.ObjectCluster) {
         DispatchQueue.main.async {
             print(message)
+            self.packetReceptionRate = message.PacketReceptionRate
             
             if (!self.updatedPicker) {
                 self.pickerData = message.SignalNames

@@ -318,10 +318,22 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         var result = await radio?.connect()
         if (result!){
             startProcessing()
-            let res = await sendCRCCommand(crcMode: BTCRCMode.TWO_BYTE)
+            // Versions first, because which CRC is safe depends on the firmware (strongestSafeCRCMode).
+            // Off before them, so both ends read them without one: this class's CRCMode outlives a
+            // disconnect, and the firmware's outlives a link drop it never saw.
+            var res = await sendCRCCommand(crcMode: BTCRCMode.OFF)
             if (res!){
-                await sendReadFWVersionCommand()
-                await sendReadShimmerVersionCommand()
+                let fwVersionRead = await sendReadFWVersionCommand()
+                let shimmerVersionRead = await sendReadShimmerVersionCommand()
+                var crcMode = BTCRCMode.OFF
+                if (fwVersionRead == true && shimmerVersionRead == true){
+                    crcMode = strongestSafeCRCModeForDevice()
+                }
+                if (crcMode != BTCRCMode.OFF){
+                    res = await sendCRCCommand(crcMode: crcMode)
+                }
+            }
+            if (res!){
                 await sendReadExpBoardVersionCommand()
                 createSensors()
                 //[0x8E 0x80 0x00 0x00]
@@ -349,7 +361,17 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 if (REV_HW_MAJOR==HardwareType.Shimmer3.rawValue){
                     await sendBMP280PressureCalibCoefficientsCommand()
                 } else if (REV_HW_MAJOR==HardwareType.Shimmer3R.rawValue){
-                    await sendPressureCalibCoefficientsCommand()
+                    let pressureSensorIdReceived = await sendPressureCalibCoefficientsCommand() ?? false
+                    if (!pressureSensorIdReceived){
+                        // No usable 0xA6 reply: v1.01.006 refuses 0xA7 on a BMP581, so
+                        // fall back to the board SR number and firmware version.
+                        // Also taken for a malformed reply. A NACK only reaches here once
+                        // NACK handling resumes the command with a failure; until then it
+                        // leaves this await suspended.
+                        let sensorType = isShimmer3RwithBmp581() ? PressureTempSensor.PressureSensorType.BMP581 : PressureTempSensor.PressureSensorType.BMP390
+                        pressureTempSensor.pressureSensorType = sensorType
+                        print("Pressure sensor from SR number: \(sensorType)")
+                    }
                 }
                 
                 await sendInquiryCommand()
@@ -362,6 +384,19 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         return true
     }
     
+    /// True when a Shimmer3R's expansion board SR number and firmware version indicate
+    /// a BMP581. Used only when the device does not report its pressure sensor in-band.
+    public func isShimmer3RwithBmp581() -> Bool {
+        return PressureTempSensor.isBmp581PresentPerSrNumber(hardwareVersion: REV_HW_MAJOR,
+                                                             expansionBoardId: EXPANSION_BOARD_ID,
+                                                             expansionBoardRev: EXPANSION_BOARD_REV,
+                                                             expansionBoardRevSpecial: EXPANSION_BOARD_REV_SPECIAL)
+            && PressureTempSensor.isBmp581SupportedByFirmware(firmwareIdentifier: REV_FW_IDENTIFIER,
+                                                              major: REV_FW_MAJOR,
+                                                              minor: REV_FW_MINOR,
+                                                              internalVersion: REV_FW_INTERNAL)
+    }
+
     func parseCalibrationDump(_ bytes:[UInt8]){
         let length = Int(bytes[0]) + (Int(bytes[1])<<8)
         var calibrationBytes = Array(bytes.prefix(length+2))
@@ -570,20 +605,52 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
         if (numberOfPackets==0){
             startTime = Date()
+            prrCurrentWindowStart = startTime
+            prrTrialStartTimeStampMs = timeSensor.LastReceivedTimeStamp / 32768 * 1000
         }
         numberOfPackets+=1
-        let endTime = Date()
-        var elapsedTime = endTime.timeIntervalSince(self.startTime)
-        if (elapsedTime == 0){
-            elapsedTime = 1
-        }
-        var PRR = Int((((Double)(numberOfPackets)/self.CurrentSamplingRate)/elapsedTime)*100)
-        if (PRR>100){
-            PRR=100
-        }
-        ojc.PacketReceptionRate = PRR
-        print("Elapsed time: \(elapsedTime) seconds ; Number of packets: \(numberOfPackets) ; Packet Reception Rate(%): \(PRR)")
+        prrCurrentPacketCount+=1
+        calculatePacketReceptionRates()
+        ojc.addData(sensorName: Shimmer3Protocol.PACKET_RECEPTION_RATE_CURRENT, formatName: Sensor.SensorFormats.Calibrated.rawValue, unitName: Sensor.SensorUnits.percent.rawValue, value: packetReceptionRateCurrent)
+        ojc.addData(sensorName: Shimmer3Protocol.PACKET_RECEPTION_RATE_OVERALL, formatName: Sensor.SensorFormats.Calibrated.rawValue, unitName: Sensor.SensorUnits.percent.rawValue, value: packetReceptionRateOverall)
+        ojc.PacketReceptionRate = Int(packetReceptionRateOverall)
+        print("Number of packets: \(numberOfPackets) ; Packet Reception Rate Current(%): \(packetReceptionRateCurrent) ; Trial(%): \(packetReceptionRateOverall)")
         return ojc
+    }
+    
+    // Packet reception rate, following the Shimmer Java/Android API (ShimmerDevice / SensorShimmerClock)
+    public static let PACKET_RECEPTION_RATE_CURRENT = "Packet_Reception_Rate_Current"
+    public static let PACKET_RECEPTION_RATE_OVERALL = "Packet_Reception_Rate_Trial"
+    static let PACKET_RECEPTION_RATE_CURRENT_INTERVAL_S: TimeInterval = 1 // mCalcReceptionRateMs in ShimmerBluetoothManager
+    public private(set) var packetReceptionRateCurrent: Double = 0
+    public private(set) var packetReceptionRateOverall: Double = 0
+    private var prrCurrentPacketCount = 0
+    private var prrCurrentWindowStart = Date()
+    private var prrTrialStartTimeStampMs: Double = 0
+    
+    func resetPacketReceptionRates() {
+        numberOfPackets = 0
+        prrCurrentPacketCount = 0
+        packetReceptionRateCurrent = 0
+        packetReceptionRateOverall = 0
+    }
+    
+    private func calculatePacketReceptionRates() {
+        // Trial: packets received vs packets expected from the device timestamps since streaming started
+        let timeDifferenceMs = timeSensor.LastReceivedTimeStamp / 32768 * 1000 - prrTrialStartTimeStampMs
+        let packetExpectedCount = Int(timeDifferenceMs / ((1 / CurrentSamplingRate) * 1000))
+        if packetExpectedCount > 0 {
+            packetReceptionRateOverall = min(max(Double(numberOfPackets) / Double(packetExpectedCount) * 100, 0), 100)
+        }
+        // Current: packets received over each interval vs packets expected for that interval
+        let now = Date()
+        let intervalS = now.timeIntervalSince(prrCurrentWindowStart)
+        if intervalS >= Shimmer3Protocol.PACKET_RECEPTION_RATE_CURRENT_INTERVAL_S {
+            let numPacketsShouldHaveReceived = intervalS * CurrentSamplingRate
+            packetReceptionRateCurrent = min(max(Double(prrCurrentPacketCount) / numPacketsShouldHaveReceived * 100, 0), 100)
+            prrCurrentPacketCount = 0
+            prrCurrentWindowStart = now
+        }
     }
     
     private var radio: BleByteRadio?
@@ -607,6 +674,22 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                     /* An unsolicited status push, consumed if it has all arrived and otherwise
                      * held until it has. It is neither a reply nor a data packet, so neither
                      * branch below may read the head of the buffer this pass. */
+                }
+                /* The Shimmer refused the command with a NACK (0xFE) rather than
+                 * acknowledging it. Checked ahead of the state branches below
+                 * because neither of them looks for it: every reply path keys off
+                 * ackCommand, so a refusal left the pending continuation suspended
+                 * and the awaiting call never returned. Nothing rescues that -
+                 * timeoutInSeconds is declared but never used - so the hang is
+                 * permanent.
+                 *
+                 * Held until the CRC bytes that follow the refusal have arrived
+                 * too, so the whole packet is consumed in one go and no CRC byte is
+                 * left to be read as the next packet header. A NACK starts 0xFE and a
+                 * push 0xFF or 0x8A, so the order of these two checks does not matter. */
+                else if (self.receivedBytes.first==PacketTypeShimmer.nackCommand.rawValue
+                    && self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue)){
+                    self.processNackFromCommand()
                 }
                 else if (self.BTState == Shimmer3BTState.STREAMING){
                     
@@ -976,23 +1059,28 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                             //self.receivedBytes.removeAll()
                             
                         } else if (self.commandSent == PacketTypeShimmer.getpressureCalibrationCoefficientsCommand) {
-                            if self.receivedBytes[1] == PacketTypeShimmer.pressureCalibrationCoefficientsResponse.rawValue {
+                            if self.receivedBytes.count > 2 && self.receivedBytes[1] == PacketTypeShimmer.pressureCalibrationCoefficientsResponse.rawValue {
 
-                                // Remove ACK + response type
-                                var data = self.receivedBytes
-                                data.removeFirst(2)
+                                // [ACK][0xA6][len = 1 + n][sensorId][n coefficient bytes][CRC]
+                                // Wait for the whole reply so its length can be checked against the sensor ID
+                                let length = 1 + 1 + 1 + Int(self.receivedBytes[2]) + Int(self.CRCMode.rawValue)
+                                if self.receivedBytes.count >= length {
+                                    // Remove ACK + response type
+                                    var data = Array(self.receivedBytes.prefix(length))
+                                    data.removeFirst(2)
 
-                                // Remove CRC
-                                if self.CRCMode != .OFF {
-                                    data.removeLast(Int(self.CRCMode.rawValue))
+                                    // Remove CRC
+                                    if self.CRCMode != .OFF {
+                                        data.removeLast(Int(self.CRCMode.rawValue))
+                                    }
+
+                                    // Sets the sensor type; parses the coefficients for a BMP390
+                                    let valid = self.pressureTempSensor.applyPressureCalibrationResponse(data)
+
+                                    self.continuation?.resume(returning: valid)
+                                    self.continuation = nil
+                                    self.receivedBytes.removeAll()
                                 }
-
-                                // Forward to same PressureTempSensor
-                                self.pressureTempSensor.parseCalParamByteArray(pressureResoRes: data)
-
-                                self.continuation?.resume(returning: true)
-                                self.continuation = nil
-                                self.receivedBytes.removeAll()
                             }
                         }
                         else if (self.commandSent == PacketTypeShimmer.setSensorsCommand) {
@@ -1064,6 +1152,33 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
     }
     
+    /// Unwinds the command in flight after the Shimmer answered it with a NACK
+    /// (0xFE) instead of an ACK.
+    ///
+    /// A refusal means the device declined this command, not that the link is
+    /// gone, so the connection is left alone. The pending continuation is resumed
+    /// with a failure value so that the caller's `await` returns. Resuming exactly
+    /// once and then clearing it matters: a CheckedContinuation resumed twice
+    /// traps at runtime, and one that is never resumed suspends the task for good.
+    ///
+    /// The firmware refuses far more than it used to. Every command except
+    /// setSDSyncCommand and ACK is refused while SD sync is enabled, which covers
+    /// the whole connect sequence; so is any SET while the device is sensing, a
+    /// sync-mode mismatch, an out-of-range InfoMem or calibration write, and
+    /// several commands the firmware accepts but never implemented.
+    private func processNackFromCommand() {
+        print("NACK Received - the Shimmer refused the command: \(String(describing: self.commandSent))")
+
+        // The NACK is the whole response packet: drop it and its CRC bytes.
+        self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
+        self.commandSent = nil
+
+        self.continuation?.resume(returning: false)
+        self.continuation = nil
+        self.continuationByteArray?.resume(returning: nil)
+        self.continuationByteArray = nil
+    }
+    
     func stopProcessing(){
         self.processing = false
     }
@@ -1125,6 +1240,16 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         packetSize = TimeStampPacketByteSize // Time stamp
         timeSensor.packetIndexTimeStamp = 0
         timeSensor.sensorEnabled = true
+        /* Both callers set CurrentSamplingRate from the inquiry response just
+           above, and the rate is what sizes the reorder window: eight sample
+           periods is what separates a pair of packets delivered out of order
+           from a dropout that happens to span the counter's roll-over point.
+           A rate that arrives as a division by zero is +Infinity here, and
+           reorderWindowTicks answers 0 for it - the branch off is the only
+           safe reading of an unknown rate. */
+        timeSensor.reorderWindowTicks = TimestampUnwrap.reorderWindowTicks(
+            samplingRateHz: CurrentSamplingRate,
+            maxTicks: timeSensor.TimeStampPacketRawMaxTicks)
         //}
 
         var enabledSensors = Int(0)
@@ -1431,7 +1556,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
         if (result!){
             print("StartStreaming!")
-            numberOfPackets = 0
+            resetPacketReceptionRates()
             self.changeState(btState:Shimmer3BTState.STREAMING)
         }
         return result
@@ -1510,11 +1635,37 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         return false
     }
     
+    public func getCRCMode() -> BTCRCMode {
+        return CRCMode
+    }
+    
+    /// Changes the CRC mode while connected (not while streaming). Re-sends the inquiry command
+    /// afterwards so the streaming packet size accounts for the new number of CRC bytes.
+    public func setCRCMode(_ crcMode:BTCRCMode) async -> Bool {
+        guard BTState == Shimmer3BTState.CONNECTED else {
+            print("Cannot set CRC mode: device must be connected and not streaming")
+            return false
+        }
+        let res = await sendCRCCommand(crcMode: crcMode)
+        guard res == true else {
+            return false
+        }
+        await sendInquiryCommand()
+        return true
+    }
+    
     private func sendCRCCommand(crcMode:BTCRCMode) async ->Bool?{
+        // Refused rather than sent when this firmware cannot carry it (strongestSafeCRCMode).
+        let strongestSafe = strongestSafeCRCModeForDevice()
+        if (crcMode.rawValue > strongestSafe.rawValue){
+            print("Refusing CRC mode \(crcMode): firmware \(REV_FW_IDENTIFIER).\(REV_FW_MAJOR).\(REV_FW_MINOR).\(REV_FW_INTERNAL) on hardware \(REV_HW_MAJOR) carries \(strongestSafe) at most")
+            return false
+        }
         let bytes:[UInt8] = [PacketTypeShimmer.setCRCCommand.rawValue,crcMode.rawValue]
         commandSent = PacketTypeShimmer.setCRCCommand
-        radio!.writeBytes(bytes:bytes)
+        // Before the write, because the firmware applies the new mode to this command's own ACK.
         self.CRCMode = crcMode
+        radio!.writeBytes(bytes:bytes)
         return await withCheckedContinuation { continuation in
             if self.continuation == nil {
                 // 2
@@ -1523,6 +1674,51 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
     }
     
+    /// LogAndStream's identifier in the GET_FW_VERSION_COMMAND reply (`REV_FW_IDENTIFIER`).
+    static let FW_IDENTIFIER_LOGANDSTREAM = 3
+
+    /// The strongest link CRC this firmware carries safely, and so the one connect() turns on.
+    ///
+    /// Everything gets two bytes except two Shimmer3R LogAndStream ranges:
+    ///
+    /// - **v1.00.024 to v1.00.049 carry one byte at most.** They build the unsolicited status push in
+    ///   `uint8_t selfcmd[6]` (`ShimBt_instreamStatusRespSend`, log-and-stream-common
+    ///   `Comms/shimmer_bt_uart.c`). The push is the ACK prefix, 0x8A 0x71, two status bytes and the
+    ///   CRC, so a 2-byte CRC makes seven bytes and the seventh overruns the buffer: the sensor
+    ///   hardfaults (DEV-621, fixed in v1.00.050). A 1-byte CRC makes six, which fits. The firmware
+    ///   pushes on dock and undock, the user button, a trial-duration expiry and a low-battery stop,
+    ///   so the overrun can come at any point in a session.
+    /// - **v1.00.010 and earlier carry none.** They turn the CRC off by themselves whenever sensing
+    ///   stops, without telling the host (`S4Sens_stopSensing`, shimmer3r-firmware
+    ///   `S3R_Production/S4_App/s4_sensing.c` at v1.00.010). Every reply after a stop is then bare,
+    ///   while this class still expects a CRC on it.
+    ///
+    /// The hardware is checked first because Shimmer3 and Shimmer3R LogAndStream version numbers
+    /// overlap, and no Shimmer3 release has either problem. No CRC is safe until both versions have
+    /// been read (they are -1 until then); the protocol document likewise puts SET_CRC_COMMAND after
+    /// the version reads (log-and-stream-common `docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md` §8.2).
+    static func strongestSafeCRCMode(hardwareVersion: Int, firmwareIdentifier: Int, firmwareMajor: Int, firmwareMinor: Int, firmwareInternal: Int) -> BTCRCMode {
+        if (hardwareVersion < 0 || firmwareIdentifier < 0){
+            return BTCRCMode.OFF
+        }
+        if (hardwareVersion != HardwareType.Shimmer3R.rawValue || firmwareIdentifier != FW_IDENTIFIER_LOGANDSTREAM){
+            return BTCRCMode.TWO_BYTE
+        }
+        let firmware = (firmwareMajor, firmwareMinor, firmwareInternal)
+        if (firmware < (1, 0, 11)){
+            return BTCRCMode.OFF
+        }
+        if (firmware >= (1, 0, 24) && firmware < (1, 0, 50)){
+            return BTCRCMode.ONE_BYTE
+        }
+        return BTCRCMode.TWO_BYTE
+    }
+
+    /// strongestSafeCRCMode for the versions this link has read.
+    private func strongestSafeCRCModeForDevice() -> BTCRCMode {
+        return Shimmer3Protocol.strongestSafeCRCMode(hardwareVersion: REV_HW_MAJOR, firmwareIdentifier: REV_FW_IDENTIFIER, firmwareMajor: REV_FW_MAJOR, firmwareMinor: REV_FW_MINOR, firmwareInternal: REV_FW_INTERNAL)
+    }
+
     public func sendReadShimmerVersionCommand() async -> Bool?{
         let bytes:[UInt8] = [PacketTypeShimmer.getShimmerVersionCommand.rawValue]
         commandSent = PacketTypeShimmer.getShimmerVersionCommand
@@ -2103,6 +2299,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case setCRCCommand = 0x8b
         case calibDumpResponse = 0x99
         case getCalibDumpCommand = 0x9a
+        case nackCommand = 0xFE
         case ackCommand = 0xFF
         case getBmp180CalibrationCoefficientsCommand = 0x59
         case bmp180CalibrationCoefficientsResponse = 0x58
