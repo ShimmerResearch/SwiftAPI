@@ -26,7 +26,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     }
 
     var startTime = Date()
-    var numberOfPackets = 0
+    /// Packets received since streaming started; the numerator of the trial PRR.
+    public private(set) var numberOfPackets = 0
     public var REV_HW_MAJOR: Int = -1
     
     public var REV_HW_MINOR: Int = -1
@@ -1658,6 +1659,20 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         return true
     }
     
+    /// Select the link CRC. Refused if this firmware cannot carry it (see strongestSafeCRCMode).
+    /// connect() already picks the strongest safe mode; this lets a caller choose a weaker one,
+    /// e.g. to measure throughput with a 1-byte CRC.
+    public func sendSetCRCMode(_ crcMode: BTCRCMode) async -> Bool {
+        return await sendCRCCommand(crcMode: crcMode) ?? false
+    }
+    /// The CRC mode in force on this link.
+    public var currentCRCMode: BTCRCMode { return CRCMode }
+    /// The sampling rate (Hz) the PRR expectation is calculated from.
+    public var currentSamplingRate: Double { return CurrentSamplingRate }
+    /// Streaming packet length in bytes on the wire: start byte, payload and CRC.
+    /// Zero until sensors have been initialised.
+    public var packetSizeBytes: Int { return PacketSize + 1 }
+
     private func sendCRCCommand(crcMode:BTCRCMode) async ->Bool?{
         // Refused rather than sent when this firmware cannot carry it (strongestSafeCRCMode).
         let strongestSafe = strongestSafeCRCModeForDevice()
