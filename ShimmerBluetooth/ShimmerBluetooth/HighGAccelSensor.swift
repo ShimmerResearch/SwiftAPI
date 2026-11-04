@@ -35,7 +35,11 @@ public class HighGAccelSensor : IMUSensor , SensorProcessing{
         let rawDataX = Double(ShimmerUtilities.parseSensorData(sensorData: x, dataType: dataType)!)
         let rawDataY = Double(ShimmerUtilities.parseSensorData(sensorData: y, dataType: dataType)!)
         let rawDataZ = Double(ShimmerUtilities.parseSensorData(sensorData: z, dataType: dataType)!)
-        if (calibrationEnabled && AlignmentMatrix.count == 3 && SensitivityMatrix.count == 3 && OffsetVector.count == 3){
+        // Raw only on a Shimmer3, as in the Java API: its accelerometer here has no
+        // calibration parameters stored anywhere, and the defaults above are the
+        // ADXL371's, which would only give a calibrated-looking value with no meaning.
+        let isShimmer3R = HardwareVersion == Shimmer3Protocol.HardwareType.Shimmer3R.rawValue
+        if (calibrationEnabled && isShimmer3R && AlignmentMatrix.count == 3 && SensitivityMatrix.count == 3 && OffsetVector.count == 3){
             let data:[Double] = [rawDataX,rawDataY,rawDataZ]
 
             let(calData)=IMUSensor.calibrateInertialSensorData(data,AlignmentMatrix,SensitivityMatrix,OffsetVector)
