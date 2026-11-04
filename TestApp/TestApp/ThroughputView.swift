@@ -19,11 +19,24 @@ struct ThroughputView: View {
     @State private var running = false
     @State private var quick = true
     @State private var log: [String] = []
+    @State private var status = ""
+    @State private var statusSince = Date()
     @State private var csvURL: URL?
 
     var body: some View {
         NavigationView {
             List {
+                if running {
+                    Section {
+                        // Ticks every second so a 60 s run visibly moves.
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(status).font(.headline)
+                                Text("\(Int(context.date.timeIntervalSince(statusSince))) s").monospacedDigit()
+                            }
+                        }
+                    } header: { Text("Now") }
+                }
                 Section {
                     Button(scanning ? "Scanning..." : "Scan for Shimmers") { Task { await scan() } }
                         .disabled(scanning || running)
@@ -56,8 +69,8 @@ struct ThroughputView: View {
                                : "Full: 3 runs x 60 s per CRC mode, about 7 min per device.")
                 }
 
-                Section { ForEach(Array(log.enumerated()), id: \.offset) { Text($0.element).font(.footnote) } }
-                    header: { Text("Log") }
+                Section { ForEach(Array(log.enumerated().reversed()), id: \.offset) { Text($0.element).font(.footnote) } }
+                    header: { Text("Log (newest first)") }
             }
             .navigationTitle("Throughput")
         }
@@ -76,7 +89,11 @@ struct ThroughputView: View {
         running = true
         csvURL = nil
         setIdleTimerDisabled(true)   // a locked phone stops the run
-        runner.onProgress = { log.append($0) }
+        runner.onProgress = { line in
+            log.append("\(Self.clock.string(from: Date()))  \(line)")
+            status = line
+            statusSince = Date()
+        }
 
         var matrix = ThroughputRunner.wikiMatrix()
         if quick {
@@ -94,6 +111,12 @@ struct ThroughputView: View {
         setIdleTimerDisabled(false)
         running = false
     }
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 
     private func save(_ csv: String) -> URL? {
         let stamp = DateFormatter()

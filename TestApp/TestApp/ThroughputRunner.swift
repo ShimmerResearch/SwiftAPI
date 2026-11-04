@@ -40,7 +40,6 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     private var radio: BleByteRadio?
     private var proto: Shimmer3Protocol?
     private var scanContinuation: CheckedContinuation<Void, Never>?
-    private var clusters = 0
     /// Called with a one-line status as the run moves on (device, config, run number).
     var onProgress: ((String) -> Void)?
 
@@ -136,7 +135,6 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
             r.status = "size-mismatch"; return r      // wrong sensors enabled: do not report a PRR
         }
 
-        clusters = 0
         let t0 = Date()
         guard await p.sendStartStreamingCommand() == true else { r.status = "config-failed"; return r }
         try? await Task.sleep(nanoseconds: UInt64(cfg.seconds) * 1_000_000_000)
@@ -167,10 +165,14 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     // Wiki rows are built by tools/throughput/update_wiki.py from this CSV.
 
     // MARK: delegates
-    func scanCompleted() { scanContinuation?.resume(); scanContinuation = nil }
-    func isConnected() {}
-    func isDisconnected() {}
-    func shimmerProtocolNewMessage(message: String) {}
-    func shimmerProtocolNewObjectCluster(message: ObjectCluster) { clusters += 1 }
-    func shimmerBTStateChange(message: Shimmer3Protocol.Shimmer3BTState) {}
+    // nonisolated: Shimmer3Protocol calls these from its background processing queue, not the
+    // main thread, so they must not touch main-actor state directly.
+    nonisolated func scanCompleted() {
+        Task { @MainActor in self.scanContinuation?.resume(); self.scanContinuation = nil }
+    }
+    nonisolated func isConnected() {}
+    nonisolated func isDisconnected() {}
+    nonisolated func shimmerProtocolNewMessage(message: String) {}
+    nonisolated func shimmerProtocolNewObjectCluster(message: ObjectCluster) {}
+    nonisolated func shimmerBTStateChange(message: Shimmer3Protocol.Shimmer3BTState) {}
 }
