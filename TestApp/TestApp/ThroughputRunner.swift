@@ -30,8 +30,12 @@ struct ThroughputRow {
     var prrApi = 0.0             // the API's own trial PRR, clamped to 100
     var prrRaw = 0.0             // received / expected, NOT clamped, so >100% is visible
     var wallSeconds = 0.0
-    var status = "ok"            // ok | connect-failed | config-failed | size-mismatch | stalled
+    var status = "ok"            // ok | connect-failed | config-failed | size-mismatch | stalled | disconnected | stop-timeout
 }
+
+/// Whichever of an operation and its timer finishes first resumes; the other does nothing.
+@MainActor
+private final class TimeoutOnce { var done = false }
 
 @MainActor
 final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManagerDelegate {
@@ -40,6 +44,10 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     private var radio: BleByteRadio?
     private var proto: Shimmer3Protocol?
     private var scanContinuation: CheckedContinuation<Void, Never>?
+    /// False once the link drops or a command goes unanswered; the next run reconnects first.
+    /// Shimmer3Protocol has no command timeout, so a reply that never comes leaves its pending
+    /// command suspended and refuses every later one on that instance.
+    private var linkUp = false
     /// Called with a one-line status as the run moves on (device, config, run number).
     var onProgress: ((String) -> Void)?
 
@@ -75,9 +83,32 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         let proto = Shimmer3Protocol(radio: radio)
         proto.delegate = self
         self.radio = radio; self.proto = proto
-        return await proto.connect()
+        linkUp = await withTimeout(45) { await proto.connect() } ?? false
+        return linkUp
     }
-    func disconnect() async { _ = await proto?.disconnect() }
+    func disconnect() async {
+        if linkUp, let p = proto { _ = await withTimeout(10) { await p.disconnect() } }
+        else { _ = await radio?.disconnect() }   // drop the link without waiting for any reply
+        linkUp = false
+    }
+
+    /// `op`'s result, or nil if it has not finished within `seconds`. Swift cannot cancel a
+    /// suspended continuation, so on timeout `op` is left suspended and the link is marked down.
+    private func withTimeout<T>(_ seconds: Double, _ op: @escaping @MainActor () async -> T) async -> T? {
+        let once = TimeoutOnce()
+        let result: T? = await withCheckedContinuation { c in
+            Task { @MainActor in
+                let v = await op()
+                if !once.done { once.done = true; c.resume(returning: v) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if !once.done { once.done = true; c.resume(returning: nil) }
+            }
+        }
+        if result == nil { linkUp = false }
+        return result
+    }
 
     // MARK: run
     /// Runs the matrix on each device in turn. A device that fails to connect gives one
@@ -96,7 +127,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         var connected = false
         onProgress?("\(deviceName): connecting")
         for _ in 0..<2 where !connected { connected = await connect(deviceName: deviceName) }   // one retry
-        guard connected, let p = proto else {
+        guard connected, var p = proto else {
             onProgress?("\(deviceName): connect failed")
             base.status = "connect-failed"; return [base]
         }
@@ -109,6 +140,18 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
                 var r = base
                 r.config = cfg.label; r.crc = Int(cfg.crc.rawValue); r.rateHz = cfg.rateHz
                 r.seconds = cfg.seconds; r.run = run
+                if !linkUp {
+                    onProgress?("\(deviceName): link lost, reconnecting")
+                    await disconnect()
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    guard await connect(deviceName: deviceName), let p2 = proto else {
+                        onProgress?("\(deviceName): reconnect failed, skipping the rest of this device")
+                        r.status = "connect-failed"; rows.append(r)
+                        await disconnect()
+                        return rows
+                    }
+                    p = p2
+                }
                 onProgress?("\(deviceName): \(cfg.crc.rawValue)-byte CRC, run \(run)/\(cfg.repeats), \(cfg.seconds) s")
                 rows.append(await runOne(p, cfg, r))
                 onProgress?("\(deviceName): \(rows.last!.status), PRR \(String(format: "%.1f", rows.last!.prrApi))%")
@@ -122,10 +165,10 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         var r = rowIn
         // Order matters: PacketSize is fixed at inquiry and includes the CRC, so the CRC goes first
         // and the sensor command (which re-runs inquiry) goes last.
-        guard await p.sendSetCRCMode(cfg.crc),
-              await p.sendSetSamplingRateCommand(samplingRate: cfg.rateHz) == true,
-              await p.sendSetSensorsCommand(sensorBitmap: cfg.sensorBitmap) else {
-            r.status = "config-failed"; return r
+        guard await withTimeout(15, { await p.sendSetCRCMode(cfg.crc) }) == true,
+              await withTimeout(15, { await p.sendSetSamplingRateCommand(samplingRate: cfg.rateHz) == true }) == true,
+              await withTimeout(15, { await p.sendSetSensorsCommand(sensorBitmap: cfg.sensorBitmap) }) == true else {
+            r.status = linkUp ? "config-failed" : "disconnected"; return r
         }
         // Accuracy gate: the packet on the wire must be the size the config implies.
         r.expectedPacketBytes = 1 + p.TimeStampPacketByteSize + cfg.payloadBytes + Int(cfg.crc.rawValue)
@@ -136,17 +179,26 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         }
 
         let t0 = Date()
-        guard await p.sendStartStreamingCommand() == true else { r.status = "config-failed"; return r }
-        try? await Task.sleep(nanoseconds: UInt64(cfg.seconds) * 1_000_000_000)
+        guard await withTimeout(15, { await p.sendStartStreamingCommand() == true }) == true else {
+            r.status = linkUp ? "config-failed" : "disconnected"; return r
+        }
+        // One-second steps so a dropped link ends the run now, not after the full duration.
+        while linkUp && Date().timeIntervalSince(t0) < Double(cfg.seconds) {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
         r.wallSeconds = Date().timeIntervalSince(t0)
         r.received = p.numberOfPackets
         r.prrApi = p.packetReceptionRateOverall
-        _ = await p.sendStopStreamingCommand()
+        if !linkUp {
+            r.status = "disconnected"   // counts so far are kept, but the row is not a result
+        } else if await withTimeout(10, { await p.sendStopStreamingCommand() == true }) == nil {
+            r.status = "stop-timeout"   // the stream ran its full time, but the stop was never ACKed
+        }
 
         // Same expectation the API uses (device timestamps), but kept unclamped.
         r.expected = Int(Double(cfg.seconds) * cfg.rateHz)
         r.prrRaw = r.expected > 0 ? Double(r.received) / Double(r.expected) * 100 : 0
-        if r.received == 0 { r.status = "stalled" }
+        if r.received == 0 && r.status == "ok" { r.status = "stalled" }
         try? await Task.sleep(nanoseconds: 2_000_000_000)   // settle between runs
         return r
     }
@@ -174,5 +226,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     nonisolated func isDisconnected() {}
     nonisolated func shimmerProtocolNewMessage(message: String) {}
     nonisolated func shimmerProtocolNewObjectCluster(message: ObjectCluster) {}
-    nonisolated func shimmerBTStateChange(message: Shimmer3Protocol.Shimmer3BTState) {}
+    nonisolated func shimmerBTStateChange(message: Shimmer3Protocol.Shimmer3BTState) {
+        if message == .DISCONNECTED { Task { @MainActor in self.linkUp = false } }
+    }
 }
