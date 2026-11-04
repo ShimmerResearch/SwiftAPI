@@ -33,6 +33,8 @@
 		3AD7C6032BD23238000E5455 /* SensorTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AD7C6022BD23238000E5455 /* SensorTest.swift */; };
 		3AEB12F92BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AEB12F82BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift */; };
 		3AED20692B0AF79E0066A0F8 /* TimeSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AED20682B0AF79E0066A0F8 /* TimeSensor.swift */; };
+		DE10230B2C0100000000001B /* TimestampUnwrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE10230A2C0100000000001A /* TimestampUnwrap.swift */; };
+		DE10230D2C0100000000001D /* TimestampUnwrapVectorsTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE10230C2C0100000000001C /* TimestampUnwrapVectorsTest.swift */; };
 		3AED206B2B0AFCD10066A0F8 /* ShimmerUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AED206A2B0AFCD10066A0F8 /* ShimmerUtilities.swift */; };
 		3AED206D2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AED206C2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift */; };
 		3AED20712B0C4BA60066A0F8 /* MagSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AED20702B0C4BA60066A0F8 /* MagSensor.swift */; };
@@ -83,6 +85,8 @@
 		3AD7C6022BD23238000E5455 /* SensorTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorTest.swift; sourceTree = "<group>"; };
 		3AEB12F82BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shimmer3SpeedTestProtocol.swift; sourceTree = "<group>"; };
 		3AED20682B0AF79E0066A0F8 /* TimeSensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeSensor.swift; sourceTree = "<group>"; };
+		DE10230A2C0100000000001A /* TimestampUnwrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimestampUnwrap.swift; sourceTree = "<group>"; };
+		DE10230C2C0100000000001C /* TimestampUnwrapVectorsTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimestampUnwrapVectorsTest.swift; sourceTree = "<group>"; };
 		3AED206A2B0AFCD10066A0F8 /* ShimmerUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerUtilities.swift; sourceTree = "<group>"; };
 		3AED206C2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerUtilitiesTest.swift; sourceTree = "<group>"; };
 		3AED20702B0C4BA60066A0F8 /* MagSensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagSensor.swift; sourceTree = "<group>"; };
@@ -163,6 +167,7 @@
 				3AED20702B0C4BA60066A0F8 /* MagSensor.swift */,
 				3AB320E92B07092C003D94F8 /* WRAccelSensor.swift */,
 				3AED20682B0AF79E0066A0F8 /* TimeSensor.swift */,
+				DE10230A2C0100000000001A /* TimestampUnwrap.swift */,
 				3AB320EB2B0709DA003D94F8 /* ObjectCluster.swift */,
 				3AED206A2B0AFCD10066A0F8 /* ShimmerUtilities.swift */,
 				92B106792B7DAFBC00AB9952 /* EXGSensor.swift */,
@@ -178,6 +183,7 @@
 				3A780C942AE12BEB00EAF050 /* ShimmerBluetoothTests.swift */,
 				3AED206C2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift */,
 				3AD7C6022BD23238000E5455 /* SensorTest.swift */,
+				DE10230C2C0100000000001C /* TimestampUnwrapVectorsTest.swift */,
 			);
 			path = ShimmerBluetoothTests;
 			sourceTree = "<group>";
@@ -314,6 +320,7 @@
 				3A77128D2AE177A4006213A8 /* ShimmerDevice.swift in Sources */,
 				3AA359152AF37943008AD334 /* ConfigByteLayoutShimmer3.swift in Sources */,
 				3AED20692B0AF79E0066A0F8 /* TimeSensor.swift in Sources */,
+				DE10230B2C0100000000001B /* TimestampUnwrap.swift in Sources */,
 				9299E50E2B85054E001EEFE0 /* PressureTempSensor.swift in Sources */,
 				3A0B4B652B0DDE0000786295 /* GSRSensor.swift in Sources */,
 				3AB320EC2B0709DA003D94F8 /* ObjectCluster.swift in Sources */,
@@ -339,6 +346,7 @@
 				3AED206D2B0B10960066A0F8 /* ShimmerUtilitiesTest.swift in Sources */,
 				3A780C952AE12BEB00EAF050 /* ShimmerBluetoothTests.swift in Sources */,
 				3AD7C6032BD23238000E5455 /* SensorTest.swift in Sources */,
+				DE10230D2C0100000000001D /* TimestampUnwrapVectorsTest.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
