@@ -86,7 +86,7 @@ class ViewModel: NSObject, ObservableObject {
     }
     
     func sendStopStreamingCommandDev2() async {
-            shimmer3Protocol!.sendStopStreamingCommand()
+            await shimmer3Protocol!.sendStopStreamingCommand()
        
     }
     func sendInfoMemIMU() async{

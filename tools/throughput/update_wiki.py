@@ -150,7 +150,8 @@ def main():
     if new == old:
         print("No change: this release is already on the page with these values.")
         return
-    page.write_text(new, encoding="utf-8", newline="\n")
+    with page.open("w", encoding="utf-8", newline="\n") as f:  # write_text(newline=) needs 3.10
+        f.write(new)
     print(git(wiki, "diff", "--", PAGE).stdout)
 
     if not a.commit:

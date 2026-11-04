@@ -15,6 +15,7 @@
 		3A780CCB2AE12CC500EAF050 /* TestAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780CCA2AE12CC500EAF050 /* TestAppUITests.swift */; };
 		3A780CCD2AE12CC500EAF050 /* TestAppUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780CCC2AE12CC500EAF050 /* TestAppUITestsLaunchTests.swift */; };
 		3A780CDC2AE12F2C00EAF050 /* ViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780CDB2AE12F2C00EAF050 /* ViewModel.swift */; };
+		3A780CDE2AE1300000EAF050 /* ThroughputRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A780CDF2AE1300000EAF050 /* ThroughputRunner.swift */; };
 		3AD18D8A2AE1436800AE7475 /* ShimmerBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AD18D892AE1436800AE7475 /* ShimmerBluetooth.framework */; };
 		3AD18D8B2AE1436800AE7475 /* ShimmerBluetooth.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3AD18D892AE1436800AE7475 /* ShimmerBluetooth.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -65,6 +66,7 @@
 		3A780CCA2AE12CC500EAF050 /* TestAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestAppUITests.swift; sourceTree = "<group>"; };
 		3A780CCC2AE12CC500EAF050 /* TestAppUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestAppUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		3A780CDB2AE12F2C00EAF050 /* ViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewModel.swift; sourceTree = "<group>"; };
+		3A780CDF2AE1300000EAF050 /* ThroughputRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThroughputRunner.swift; sourceTree = "<group>"; };
 		3AD18D892AE1436800AE7475 /* ShimmerBluetooth.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = ShimmerBluetooth.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -121,6 +123,7 @@
 				3A7712932AE2BAF9006213A8 /* Info.plist */,
 				3A7712922AE2B5C9006213A8 /* TestAppDebug.entitlements */,
 				3A780CDB2AE12F2C00EAF050 /* ViewModel.swift */,
+				3A780CDF2AE1300000EAF050 /* ThroughputRunner.swift */,
 				3A780CAE2AE12CC400EAF050 /* TestAppApp.swift */,
 				3A780CB02AE12CC400EAF050 /* ContentView.swift */,
 				3A780CB22AE12CC500EAF050 /* Assets.xcassets */,
@@ -296,6 +299,7 @@
 			files = (
 				3A780CB12AE12CC400EAF050 /* ContentView.swift in Sources */,
 				3A780CDC2AE12F2C00EAF050 /* ViewModel.swift in Sources */,
+				3A780CDE2AE1300000EAF050 /* ThroughputRunner.swift in Sources */,
 				3A780CAF2AE12CC400EAF050 /* TestAppApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
