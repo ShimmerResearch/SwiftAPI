@@ -726,7 +726,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         if (self.commandSent==PacketTypeShimmer.getCalibDumpCommand){
                             if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.calibDumpResponse.rawValue)
                             {
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next. A sleep
+                                // here would hold `queue`, so the rest could never arrive.
+                                guard self.receivedBytes.count >= 3,
+                                      self.receivedBytes.count >= Int(self.receivedBytes[2]) + 3 + 2 + Int(self.CRCMode.rawValue) else { return }
                                 var received = self.receivedBytes
                                 print("\(received.count) data: \(received)")
                                 let length = received[2]
@@ -760,7 +763,9 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         if (self.commandSent==PacketTypeShimmer.getInfoMem){
                             if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.getInfoMemResponse.rawValue)
                             {
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= 3,
+                                      self.receivedBytes.count >= Int(self.receivedBytes[2]) + 3 + Int(self.CRCMode.rawValue) else { return }
                                 //print(self.receivedBytes)
                                 var received = self.receivedBytes
                                 //print(received)
@@ -992,7 +997,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                             if (self.receivedBytes[1] == PacketTypeShimmer.bmp280CalibrationCoefficientsResponse.rawValue)
                             {
                                 print("Get Bmp280 Calib Coefficient ACK Received")
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= 1 + 1 + 24 + Int(self.CRCMode.rawValue) else { return }
                                 
                                 
                                 var length = 1 + 1 + 24 //ack + response byte + 24
