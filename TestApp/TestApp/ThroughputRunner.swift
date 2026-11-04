@@ -2,11 +2,11 @@
 //  ThroughputRunner.swift
 //  TestApp
 //
-//  DRAFT. Not compiled, not in project.pbxproj, never run. See docs/THROUGHPUT_AUTOMATION.md.
+//  Not yet run against a Shimmer. See docs/THROUGHPUT_AUTOMATION.md.
 //
-//  Runs the BLE-Throughput wiki matrix against one Shimmer3 / Shimmer3R, found by name, with no
-//  taps: scan, connect, record versions, then for each config set CRC -> rate -> sensors, stream,
-//  count, stop. Writes a CSV and the wiki rows.
+//  Runs the BLE-Throughput wiki matrix against one or more Shimmer3 / Shimmer3R, found by name, one
+//  device after another: scan, connect, record versions, then for each config set CRC -> rate ->
+//  sensors, stream, count, stop. Writes a CSV for tools/throughput/update_wiki.py.
 //
 import Foundation
 import CoreBluetooth
@@ -41,6 +41,8 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     private var proto: Shimmer3Protocol?
     private var scanContinuation: CheckedContinuation<Void, Never>?
     private var clusters = 0
+    /// Called with a one-line status as the run moves on (device, config, run number).
+    var onProgress: ((String) -> Void)?
 
     // MARK: matrix (mirrors wiki Test Results 3 and 4)
     static func wikiMatrix() -> [ThroughputConfig] {
@@ -52,6 +54,16 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
             ThroughputConfig(label: "LN Accel, GSR, PPG", sensorBitmap: bitmap, payloadBytes: 10,
                              rateHz: 128, crc: $0, seconds: 60, repeats: 3)
         }
+    }
+
+    // MARK: scan for every Shimmer in range
+    /// Names of the Shimmers advertising within `seconds`, sorted. Empty if Bluetooth is off.
+    func scanShimmers(seconds: Double = 8) async -> [String] {
+        manager.delegate = self
+        guard manager.startScanning(timeout: seconds) else { return [] }
+        await withCheckedContinuation { scanContinuation = $0 }    // resumed by scanCompleted()
+        let names = manager.getDiscoveredPeripherals().compactMap { $0.name }.filter { $0.hasPrefix("Shimmer") }
+        return Array(Set(names)).sorted()
     }
 
     // MARK: connect by name
@@ -69,12 +81,24 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     func disconnect() async { _ = await proto?.disconnect() }
 
     // MARK: run
+    /// Runs the matrix on each device in turn. A device that fails to connect gives one
+    /// connect-failed row and the run moves on to the next.
+    func run(deviceNames: [String], matrix: [ThroughputConfig], appVersion: String, ios: String) async -> [ThroughputRow] {
+        var rows: [ThroughputRow] = []
+        for name in deviceNames {
+            rows += await run(deviceName: name, matrix: matrix, appVersion: appVersion, ios: ios)
+        }
+        return rows
+    }
+
     func run(deviceName: String, matrix: [ThroughputConfig], appVersion: String, ios: String) async -> [ThroughputRow] {
         var rows: [ThroughputRow] = []
         var base = ThroughputRow(); base.device = deviceName; base.ios = ios; base.app = appVersion
         var connected = false
+        onProgress?("\(deviceName): connecting")
         for _ in 0..<2 where !connected { connected = await connect(deviceName: deviceName) }   // one retry
         guard connected, let p = proto else {
+            onProgress?("\(deviceName): connect failed")
             base.status = "connect-failed"; return [base]
         }
         base.fw = "\(p.REV_FW_MAJOR).\(p.REV_FW_MINOR).\(p.REV_FW_INTERNAL)"
@@ -86,7 +110,9 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
                 var r = base
                 r.config = cfg.label; r.crc = Int(cfg.crc.rawValue); r.rateHz = cfg.rateHz
                 r.seconds = cfg.seconds; r.run = run
+                onProgress?("\(deviceName): \(cfg.crc.rawValue)-byte CRC, run \(run)/\(cfg.repeats), \(cfg.seconds) s")
                 rows.append(await runOne(p, cfg, r))
+                onProgress?("\(deviceName): \(rows.last!.status), PRR \(String(format: "%.1f", rows.last!.prrApi))%")
             }
         }
         await disconnect()

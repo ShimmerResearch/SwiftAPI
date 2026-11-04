@@ -9,7 +9,8 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject var viewModel = ViewModel()
-    
+    @State private var showThroughput = false
+
     var body: some View {
         VStack {
             Image(systemName: "globe")
@@ -19,8 +20,9 @@ struct ContentView: View {
             
         }
         .padding()
-        
-        
+
+        Button("Throughput Test", action: { showThroughput = true })
+            .sheet(isPresented: $showThroughput) { ThroughputView() }
         Button("Scan Veri",action: { viewModel.test()})
         Button("Connect Dev1",action: { Task {
             do {

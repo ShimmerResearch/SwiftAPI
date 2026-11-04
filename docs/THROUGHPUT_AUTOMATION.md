@@ -1,18 +1,20 @@
 # BLE throughput test automation (draft)
 
 Goal: fill the wiki's BLE-Throughput tables for a new Shimmer3 / Shimmer3R firmware with one command
-and almost no human steps. Status: **draft, never compiled or run.** This repo only compiles in CI
-(`AGENTS.md`), and `ThroughputRunner.swift` is not yet in `project.pbxproj`.
+and almost no human steps. Status: TestApp builds with the runner (checked locally on a Mac with Xcode 26.6). **Not yet run
+against a Shimmer.**
 
 ## Human steps (all that remain)
 1. Flash the firmware under test (Shimmer3 v1.01.009, Shimmer3R v1.01.025) and power the board on.
 2. Plug in and unlock the iPhone; put the board about 2.5 m away. Tap Allow on the first-launch
    Bluetooth prompt, once per install.
-3. Run the command below with the device name.
+3. In TestApp tap **Throughput Test**, then **Scan for Shimmers**, tick one or more devices, and tap
+   **Run**. Devices are tested one after another into one CSV.
 4. Run `tools/throughput/update_wiki.py` (below), read the diff, then push the wiki yourself.
 
 ## Automated
-- Scan and connect by BLE name (`BluetoothManager.startScanning(deviceName:)`), one retry.
+- Scan lists every advertising device whose name starts with `Shimmer`; connect by BLE name
+  (`BluetoothManager.startScanning(deviceName:)`), one retry.
 - Record FW, hardware, expansion board, iOS and app version from the device, not from typing.
 - For each config and each of N repeats: set CRC, then rate, then sensors, stream, count, stop.
 - Write a CSV with every run.
@@ -41,22 +43,23 @@ Note: Shimmer3R v1.01.025 is above v1.00.050, so 2-byte is its strongest safe CR
 allowed. Shimmer3 always allows 2-byte.
 
 ## To finish
-- Add `ThroughputRunner.swift` to the TestApp target (four hand-written pbxproj entries).
-- A `ThroughputUITests` XCUITest that reads the device name from `launchEnvironment`, calls the
-  runner, and writes the CSV to the test attachments.
-- Verify the PPG sensor bit (`SENSOR_INT_A1`) gives the wiki's A13 PPG channel, and the payload
-  size of 10 bytes.
-- Radio version (RN4678 / IF820) is not read by the API; pass it in as a launch argument.
-- Keep the phone awake: set `UIApplication.shared.isIdleTimerDisabled = true` for the run.
-- Check that a CRC change after connect survives `sendSetSensorsCommand`'s inquiry on both boards.
+- Radio version (RN4678 / IF820) is not read by the API; it is passed to `update_wiki.py --radio`.
+- Check that a CRC change after connect survives `sendSetSensorsCommand`'s inquiry on both boards
+  (a run with the wrong CRC is caught by the packet-size gate and written as `size-mismatch`).
+- A connect that fails at the CoreBluetooth level never resumes `BluetoothManager.connect`, so the
+  run hangs rather than writing `connect-failed`. Kill the app and untick that device.
+
+Checked: `SENSOR_INT_A1` (0x0100) enables channel `InternalAdc1` (0x12), which is internal ADC A13,
+the wiki's PPG channel. 6 accel + 2 GSR + 2 PPG = 10 payload bytes.
 
 ## Run
-```
-xcodebuild test -project TestApp/TestApp.xcodeproj -scheme TestApp \
-  -destination 'platform=iOS,name=<iPhone name>' \
-  -only-testing:TestAppUITests/ThroughputUITests \
-  SHIMMER_DEVICE_NAME=Shimmer3R-XXXX
-```
+Open `Shimmer.xcworkspace`, select the **TestApp** scheme and the iPhone, set a team under Signing &
+Capabilities, and Run. **Quick check** (on by default) does 10 s x 1 run per CRC mode as a smoke test;
+turn it off for the wiki matrix (3 x 60 s per CRC mode, about 7 min per device). The phone is kept
+awake during a run.
+
+The CSV is saved as `throughput_<date>_<time>.csv` in the app's Documents folder. Get it with **Share
+CSV** (AirDrop to the Mac), or Finder > iPhone > Files > TestApp.
 
 ## Wiki update (`tools/throughput/update_wiki.py`)
 Python 3, stdlib only, runs on the Mac. Adds one table per hardware per release, above `# Notes`:
