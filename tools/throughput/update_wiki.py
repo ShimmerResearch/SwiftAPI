@@ -9,7 +9,10 @@ Dry run by default: prints the diff and changes nothing. --commit commits in the
 It never pushes. Push the wiki yourself after reading the diff.
 
     python update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --phone "iPhone 12" \
-        --radio Shimmer3="RN4678 v1.23" --radio Shimmer3R="IF820 v01.04.16.16" --wiki ./SwiftAPI.wiki
+        --wiki ./SwiftAPI.wiki
+
+The radio cell comes from the CSV's radio column (read from the device); --radio HW=VERSION
+overrides it, and is needed for CSVs written before that column existed.
 """
 import argparse
 import csv
@@ -63,13 +66,18 @@ def build_rows(rows, release, phone, radios, distance, min_runs):
         if len({x["fw"] for x in g}) != 1 or len({x["packet_bytes"] for x in g}) != 1:
             problems.append(f"{hw} {config} crc={crc}: runs disagree on firmware or packet size")
             continue
-        if hw not in radios:
-            problems.append(f"no --radio given for {hw}")
+        csv_radios = {x.get("radio", "") for x in g} - {""}   # older CSVs have no radio column
+        if len(csv_radios) > 1 and hw not in radios:
+            problems.append(f"{hw} {config} crc={crc}: runs disagree on radio {sorted(csv_radios)}; pass --radio")
+            continue
+        radio = radios.get(hw) or next(iter(csv_radios), None)
+        if not radio:
+            problems.append(f"no radio for {hw}: not in the CSV and no --radio given")
             continue
         prr = statistics.median(float(x["prr_api"]) for x in g)
         first = g[0]
         tables[hw].append([
-            phone, hw, fw_cell(hw, first["fw"]), radios[hw], config,
+            phone, hw, fw_cell(hw, first["fw"]), radio, config,
             f"{crc} byte" + ("" if crc == 1 else "s"), f"{first['packet_bytes']} bytes",
             f"{num(rate)} Hz", f"{secs} s", f"{round(prr)}%", first["ios"], distance,
         ])
@@ -118,7 +126,8 @@ def main():
     ap.add_argument("--release", required=True, help="e.g. ShimmerSwiftAPI_v1.1.0")
     ap.add_argument("--phone", required=True, help='Equipment cell, e.g. "iPhone 12"')
     ap.add_argument("--radio", action="append", default=[], metavar="HW=VERSION",
-                    help='e.g. Shimmer3="RN4678 v1.23" (repeat per hardware)')
+                    help='e.g. Shimmer3="RN4678 v1.23" (repeat per hardware). Overrides the CSV radio column; '
+                         'only needed for CSVs without one')
     ap.add_argument("--distance", default="2.5 m")
     ap.add_argument("--min-runs", type=int, default=3, help="ok runs needed per config (default 3)")
     ap.add_argument("--wiki", type=Path, help="existing wiki clone (default: clone to a temp dir)")

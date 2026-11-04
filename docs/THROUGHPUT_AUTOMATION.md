@@ -15,7 +15,8 @@ against a Shimmer.**
 ## Automated
 - Scan lists every advertising device whose name starts with `Shimmer`; connect by BLE name
   (`BluetoothManager.startScanning(deviceName:)`), one retry.
-- Record FW, hardware, expansion board, iOS and app version from the device, not from typing.
+- Record FW, hardware, Bluetooth radio (`0xA1` -> e.g. `RN4678 v1.23`, `IF820 v01.04.16.16`),
+  expansion board, iOS and app version from the device, not from typing.
 - For each config and each of N repeats: set CRC, then rate, then sensors, stream, count, stop.
 - Write a CSV with every run.
 - `tools/throughput/update_wiki.py` turns the CSV into new wiki tables (median of the runs).
@@ -30,7 +31,9 @@ against a Shimmer.**
   ratio, so over-100% (a timing or rate fault) is visible.
 - **Repeats and median.** 3 runs per config. The wiki notes a +/-8% tolerance at high throughput; one
   run is not a result.
-- **Failures are rows.** Connect, config and stall failures are written with a status, never dropped.
+- **Retries.** A run that is not `ok` is tried again up to 3 times (`maxRetries`), reconnecting
+  first if the link dropped. Only the last try is written, with its `attempts` count; if every try
+  failed, that failure is written with its status, never dropped.
 - **Wall time recorded** next to the nominal duration.
 
 ## Required API change (in this branch)
@@ -43,7 +46,6 @@ Note: Shimmer3R v1.01.025 is above v1.00.050, so 2-byte is its strongest safe CR
 allowed. Shimmer3 always allows 2-byte.
 
 ## To finish
-- Radio version (RN4678 / IF820) is not read by the API; it is passed to `update_wiki.py --radio`.
 - Check that a CRC change after connect survives `sendSetSensorsCommand`'s inquiry on both boards
   (a run with the wrong CRC is caught by the packet-size gate and written as `size-mismatch`).
 - A connect that fails at the CoreBluetooth level never resumes `BluetoothManager.connect`, so the
@@ -67,8 +69,10 @@ Python 3, stdlib only, runs on the Mac. Adds one table per hardware per release,
 marker comment per table makes a re-run replace that table instead of duplicating it.
 
 ```
-python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0   --phone "iPhone 12" --radio Shimmer3="RN4678 v1.23" --radio Shimmer3R="IF820 v01.04.16.16"
+python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --phone "iPhone 12"
 ```
+- The Radio Type cell comes from the CSV's `radio` column. `--radio Shimmer3="RN4678 v1.23"` overrides
+  it, and is needed for CSVs written before that column existed.
 - Dry run by default: prints the diff, changes nothing. `--commit` commits in the local wiki clone.
   **It never pushes.** Review the diff, then `git -C <wiki> push` yourself.
 - Only `ok` runs count. Each config needs `--min-runs` (default 3) ok runs, and the runs must agree on

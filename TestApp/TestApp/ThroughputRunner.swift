@@ -23,8 +23,9 @@ struct ThroughputConfig {
 }
 
 struct ThroughputRow {
-    var device = "", fw = "", hw = "", expBoard = "", ios = "", app = ""
+    var device = "", fw = "", hw = "", radio = "", expBoard = "", ios = "", app = ""
     var config = "", crc = 0, rateHz = 0.0, seconds = 0, run = 0
+    var attempts = 0             // 1 if the first try was ok; up to 1 + maxRetries
     var packetBytes = 0, expectedPacketBytes = 0
     var received = 0, expected = 0
     var prrApi = 0.0             // the API's own trial PRR, clamped to 100
@@ -50,6 +51,8 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     private var linkUp = false
     /// Called with a one-line status as the run moves on (device, config, run number).
     var onProgress: ((String) -> Void)?
+    /// A run that is not ok is tried again up to this many times; only the last try is recorded.
+    var maxRetries = 3
 
     // MARK: matrix (mirrors wiki Test Results 3 and 4)
     static func wikiMatrix() -> [ThroughputConfig] {
@@ -134,27 +137,43 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         base.fw = "\(p.REV_FW_MAJOR).\(p.REV_FW_MINOR).\(p.REV_FW_INTERNAL)"
         base.hw = p.REV_HW_MAJOR == Shimmer3Protocol.HardwareType.Shimmer3R.rawValue ? "Shimmer3R" : "Shimmer3"
         base.expBoard = "SR\(p.EXPANSION_BOARD_ID)-\(p.EXPANSION_BOARD_REV).\(p.EXPANSION_BOARD_REV_SPECIAL)"
+        if await withTimeout(10, { await p.sendReadBtFwVersionCommand() == true }) == true {
+            base.radio = ShimmerUtilities.btModuleDisplayName(p.btModuleVersion)
+        }
+        onProgress?("\(deviceName): \(base.hw) FW \(base.fw), radio \(base.radio.isEmpty ? "not read" : base.radio)")
 
         for cfg in matrix {
             for run in 1...cfg.repeats {
-                var r = base
-                r.config = cfg.label; r.crc = Int(cfg.crc.rawValue); r.rateHz = cfg.rateHz
-                r.seconds = cfg.seconds; r.run = run
-                if !linkUp {
-                    onProgress?("\(deviceName): link lost, reconnecting")
-                    await disconnect()
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    guard await connect(deviceName: deviceName), let p2 = proto else {
-                        onProgress?("\(deviceName): reconnect failed, skipping the rest of this device")
-                        r.status = "connect-failed"; rows.append(r)
+                var template = base
+                template.config = cfg.label; template.crc = Int(cfg.crc.rawValue); template.rateHz = cfg.rateHz
+                template.seconds = cfg.seconds; template.run = run
+                var r = template
+                for attempt in 1...(1 + maxRetries) {
+                    r = template
+                    r.attempts = attempt
+                    let tryLabel = attempt == 1 ? "" : " (retry \(attempt - 1)/\(maxRetries))"
+                    if !linkUp {
+                        onProgress?("\(deviceName): link lost, reconnecting")
                         await disconnect()
-                        return rows
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        guard await connect(deviceName: deviceName), let p2 = proto else {
+                            onProgress?("\(deviceName): reconnect failed\(tryLabel)")
+                            r.status = "connect-failed"
+                            continue
+                        }
+                        p = p2
                     }
-                    p = p2
+                    onProgress?("\(deviceName): \(cfg.crc.rawValue)-byte CRC, run \(run)/\(cfg.repeats), \(cfg.seconds) s\(tryLabel)")
+                    r = await runOne(p, cfg, r)
+                    onProgress?("\(deviceName): \(r.status), PRR \(String(format: "%.1f", r.prrApi))%")
+                    if r.status == "ok" { break }
                 }
-                onProgress?("\(deviceName): \(cfg.crc.rawValue)-byte CRC, run \(run)/\(cfg.repeats), \(cfg.seconds) s")
-                rows.append(await runOne(p, cfg, r))
-                onProgress?("\(deviceName): \(rows.last!.status), PRR \(String(format: "%.1f", rows.last!.prrApi))%")
+                rows.append(r)   // the ok try, or the last failure if every try failed
+                if r.status == "connect-failed" {
+                    onProgress?("\(deviceName): unreachable, skipping the rest of this device")
+                    await disconnect()
+                    return rows
+                }
             }
         }
         await disconnect()
@@ -205,9 +224,9 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
 
     // MARK: output
     static func csv(_ rows: [ThroughputRow]) -> String {
-        let head = "device,hw,fw,exp_board,app,ios,config,crc,rate_hz,seconds,run,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
+        let head = "device,hw,fw,radio,exp_board,app,ios,config,crc,rate_hz,seconds,run,attempts,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
         let lines = rows.map { r in
-            [r.device, r.hw, r.fw, r.expBoard, r.app, r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)",
+            [r.device, r.hw, r.fw, r.radio, r.expBoard, r.app, r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
              "\(r.packetBytes)", "\(r.expectedPacketBytes)", "\(r.received)", "\(r.expected)",
              String(format: "%.1f", r.prrApi), String(format: "%.1f", r.prrRaw), String(format: "%.1f", r.wallSeconds), r.status].joined(separator: ",")
         }
