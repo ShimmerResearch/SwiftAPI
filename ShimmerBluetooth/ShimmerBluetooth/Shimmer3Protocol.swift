@@ -437,6 +437,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
             exgSensor = EXGSensor()
             pressureTempSensor = PressureTempSensor(hwid: REV_HW_MAJOR)
             battVoltageSensor = BattVoltageSensor()
+            // 0x14-0x16 carry this generation's MPU9x50/ICM-20948 accelerometer, and
+            // HighGAccelSensor decodes them by its HardwareVersion (DEV-1338). Without
+            // this it kept the UNKNOWN default, or a Shimmer3R's from an earlier connection.
+            highGAccelSensor = HighGAccelSensor(hwid: REV_HW_MAJOR)
         } else if(REV_HW_MAJOR==HardwareType.Shimmer3R.rawValue){
             lnAccelSensor = LNAccelSensor(hwid: REV_HW_MAJOR)
             magSensor = MagSensor(hwid: REV_HW_MAJOR)

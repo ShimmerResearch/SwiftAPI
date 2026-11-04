@@ -26,10 +26,20 @@ public class HighGAccelSensor : IMUSensor , SensorProcessing{
         let x = Array(sensorPacket[packetIndexHighGAccelX..<packetIndexHighGAccelX+2])
         let y = Array(sensorPacket[packetIndexHighGAccelY..<packetIndexHighGAccelY+2])
         let z = Array(sensorPacket[packetIndexHighGAccelZ..<packetIndexHighGAccelZ+2])
-        let rawDataX = Double(ShimmerUtilities.parseSensorData(sensorData: x, dataType: SensorDataType.i12MSB)!)
-        let rawDataY = Double(ShimmerUtilities.parseSensorData(sensorData: y, dataType: SensorDataType.i12MSB)!)
-        let rawDataZ = Double(ShimmerUtilities.parseSensorData(sensorData: z, dataType: SensorDataType.i12MSB)!)
-        if (calibrationEnabled && AlignmentMatrix.count == 3 && SensitivityMatrix.count == 3 && OffsetVector.count == 3){
+        // 0x14-0x16 are big-endian on both generations, in different encodings
+        // (log-and-stream-common docs/SHIMMER3_STREAMING_DATA_FORMAT.md section 5).
+        // A Shimmer3R sends the ADXL371's 12-bit value, left-justified. A Shimmer3
+        // sends its MPU9x50/ICM-20948 accelerometer as a plain int16; decoding that
+        // as 12 bits read it at a sixteenth of its value (DEV-1338).
+        let dataType = HardwareVersion == Shimmer3Protocol.HardwareType.Shimmer3.rawValue ? SensorDataType.i16MSB : SensorDataType.i12MSB
+        let rawDataX = Double(ShimmerUtilities.parseSensorData(sensorData: x, dataType: dataType)!)
+        let rawDataY = Double(ShimmerUtilities.parseSensorData(sensorData: y, dataType: dataType)!)
+        let rawDataZ = Double(ShimmerUtilities.parseSensorData(sensorData: z, dataType: dataType)!)
+        // Raw only on a Shimmer3, as in the Java API: its accelerometer here has no
+        // calibration parameters stored anywhere, and the defaults above are the
+        // ADXL371's, which would only give a calibrated-looking value with no meaning.
+        let isShimmer3R = HardwareVersion == Shimmer3Protocol.HardwareType.Shimmer3R.rawValue
+        if (calibrationEnabled && isShimmer3R && AlignmentMatrix.count == 3 && SensitivityMatrix.count == 3 && OffsetVector.count == 3){
             let data:[Double] = [rawDataX,rawDataY,rawDataZ]
 
             let(calData)=IMUSensor.calibrateInertialSensorData(data,AlignmentMatrix,SensitivityMatrix,OffsetVector)
