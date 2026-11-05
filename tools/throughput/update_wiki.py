@@ -6,10 +6,13 @@ One table per API release, numbered after the last "# Test Results N" on the pag
 release's table (grouped by hardware, Shimmer3 first); rows already in it are not repeated, and no
 row is ever removed. Other tables are never touched.
 
-Dry run by default: prints the diff and changes nothing. --commit commits in the local wiki clone.
-It never pushes. Push the wiki yourself after reading the diff.
+Dry run by default: prints the change and touches nothing. To publish in one step:
 
-    python update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --wiki ./SwiftAPI.wiki
+    python3 update_wiki.py ~/Downloads/throughput_20261105_120207.csv --push
+
+--push clones the live wiki fresh, shows the change, asks before pushing, then commits and pushes.
+--release defaults to the latest ShimmerSwiftAPI_v* tag on GitHub. --commit commits in a clone
+(--wiki) without pushing.
 
 The CSV is the app's export: the wiki's own columns, one row per setting, copied as they are. A row
 whose Packet Reception Rate is not a percentage (incomplete, connect failed) or whose Streaming
@@ -25,6 +28,8 @@ from collections import defaultdict
 from pathlib import Path
 
 WIKI_URL = "https://github.com/ShimmerResearch/SwiftAPI.wiki.git"
+WIKI_PAGE_URL = "https://github.com/ShimmerResearch/SwiftAPI/wiki/BLE-Throughput"
+REPO_URL = "https://github.com/ShimmerResearch/SwiftAPI.git"
 PAGE = "BLE-Throughput.md"
 HW_ORDER = ["Shimmer3", "Shimmer3R"]
 COLUMNS = ["Equipment", "Shimmer Device", "FW Version", "Radio Type", "Sensors Enabled", "CRC Bytes",
@@ -94,13 +99,29 @@ def git(wiki, *args, check=True):
     return subprocess.run(["git", "-C", str(wiki), *args], capture_output=True, text=True, check=check)
 
 
+def latest_release():
+    """The highest ShimmerSwiftAPI_vX.Y.Z tag on GitHub, or None."""
+    out = subprocess.run(["git", "ls-remote", "--tags", REPO_URL, "ShimmerSwiftAPI_v*"],
+                         capture_output=True, text=True, check=True).stdout
+    tags = set(re.findall(r"refs/tags/(ShimmerSwiftAPI_v(\d+)\.(\d+)\.(\d+))$", out, re.M))
+    return max(tags, key=lambda t: tuple(int(x) for x in t[1:]))[0] if tags else None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--csv", required=True, type=Path)
-    ap.add_argument("--release", required=True, help="e.g. ShimmerSwiftAPI_v1.1.0")
-    ap.add_argument("--wiki", type=Path, help="existing wiki clone (default: clone to a temp dir)")
-    ap.add_argument("--commit", action="store_true", help="commit in the wiki clone. Never pushes.")
+    ap.add_argument("csv", nargs="?", type=Path, help="the app's CSV")
+    ap.add_argument("--csv", dest="csv_opt", type=Path, help=argparse.SUPPRESS)   # older spelling
+    ap.add_argument("--release", help="e.g. ShimmerSwiftAPI_v1.1.0 (default: the latest release tag on GitHub)")
+    ap.add_argument("--wiki", type=Path, help="existing wiki clone (default: a fresh clone in a temp dir)")
+    ap.add_argument("--commit", action="store_true", help="commit in the wiki clone, without pushing")
+    ap.add_argument("--push", action="store_true",
+                    help="publish: fresh clone of the live wiki, show the change, ask, commit and push")
     a = ap.parse_args()
+    a.csv = a.csv or a.csv_opt
+    if not a.csv:
+        ap.error("give the CSV path")
+    if a.push and a.wiki:
+        ap.error("--push always works on a fresh clone of the live wiki; leave out --wiki")
 
     with a.csv.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -109,6 +130,12 @@ def main():
         rows = list(reader)
     if not rows:
         sys.exit("CSV has no rows")
+
+    if not a.release:
+        a.release = latest_release()
+        if not a.release:
+            sys.exit("no ShimmerSwiftAPI_v* release tag found on GitHub; pass --release")
+        print(f"API release: {a.release} (latest release tag on GitHub; --release to change)")
 
     tables, problems = build_rows(rows, a.release)
     for p in problems:
@@ -133,14 +160,24 @@ def main():
         f.write(new)
     print(git(wiki, "diff", "--", PAGE).stdout)
 
-    if not a.commit:
+    if not (a.commit or a.push):
         git(wiki, "checkout", "--", PAGE)
-        print("Dry run: nothing changed. Add --commit to commit locally.")
+        print("Dry run: nothing changed. Add --push to publish, or --commit to commit locally.")
+        return
+    if a.push and input("Publish this to the GitHub wiki? [y/N] ").strip().lower() != "y":
+        git(wiki, "checkout", "--", PAGE)
+        print("Cancelled: nothing published.")
         return
     git(wiki, "add", PAGE)
     hws = ", ".join(h for h in HW_ORDER if h in tables)
     git(wiki, "commit", "-m", f"BLE throughput results for {a.release} ({hws})")
-    print(f"Committed in {wiki}. Not pushed. Review, then: git -C \"{wiki}\" push")
+    if not a.push:
+        print(f"Committed in {wiki}. Not pushed. Review, then: git -C \"{wiki}\" push")
+        return
+    pushed = git(wiki, "push", "--quiet", check=False)
+    if pushed.returncode != 0:
+        sys.exit(f"Push failed, nothing published:\n{pushed.stderr}The commit is in {wiki}.")
+    print(f"Published: {WIKI_PAGE_URL}")
 
 
 if __name__ == "__main__":

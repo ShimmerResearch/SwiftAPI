@@ -73,16 +73,21 @@ not know which release it was built from. A later run for the same release
 repeated and none are removed. A new release starts the next number. Other tables are never touched.
 
 ```
-python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0
+python3 tools/throughput/update_wiki.py ~/Downloads/throughput_<date>_<time>.csv           # dry run
+python3 tools/throughput/update_wiki.py ~/Downloads/throughput_<date>_<time>.csv --push    # publish
 ```
+- `--push` clones the live wiki fresh, prints the change, asks `Publish this to the GitHub wiki? [y/N]`,
+  then commits and pushes with your GitHub login. Anything but `y` publishes nothing.
+- The API release defaults to the latest `ShimmerSwiftAPI_v*` tag on GitHub (printed);
+  `--release ShimmerSwiftAPI_vX.Y.Z` names another.
 - Every cell comes from the app. Equipment is the phone model from the iOS model identifier
   (e.g. `iPhone10,3` -> "iPhone X"), Radio Type is read from the device (`0xA1`), and Distance is the
   app's Distance field (default 2.5 m).
 - Rows are skipped with a warning when PRR is not a percentage (incomplete, connect failed), the
   duration is not 60 s (a quick check), or the phone is a raw identifier missing from the app's table.
 - CSVs from before this format (per-run columns) are refused.
-- Dry run by default: prints the diff, changes nothing. `--commit` commits in the local wiki clone.
-  **It never pushes.** Review the diff, then `git -C <wiki> push` yourself.
-- `--wiki <clone>` uses an existing clone (must be clean); otherwise it clones to a temp folder.
-- Checked on the Mac against the live wiki with the 2026-11-05 results converted to this format:
-  no change to tables 5 and 6; incomplete and quick-check rows skipped.
+- Without `--push` it is a dry run. `--commit --wiki <clone>` commits in a clone without pushing.
+- Checked on the Mac against the live wiki with the 2026-11-05 results: a new release becomes the next
+  table, a re-run adds rows to its release's table, republishing changes nothing, incomplete and
+  quick-check rows are skipped, and answering `n` at the prompt publishes nothing. An actual push
+  has not been run yet.
