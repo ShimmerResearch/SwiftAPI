@@ -1,0 +1,116 @@
+# Makes a Swift API release: a ShimmerSwiftAPI_v<version> tag and GitHub release on
+# main, created only after the test suite passes on that exact commit. Source-only,
+# like the releases before it - consumers build ShimmerBluetooth from the tagged
+# source. Run it from Actions > Release > Run workflow; see AGENTS.md "Releasing".
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version as MAJOR.MINOR.PATCH, e.g. 1.1.0 (tagged ShimmerSwiftAPI_v1.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark it as a pre-release"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry run: test and show the release notes, but create nothing"
+        type: boolean
+        default: false
+
+# The repository's default workflow token is read-only; creating a tag and a
+# release needs write access to contents, and nothing else.
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+    - name: Check the request
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+          echo "::error::Releases are made from main, not $GITHUB_REF"
+          exit 1
+        fi
+        if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::The version must be MAJOR.MINOR.PATCH, not '$VERSION'"
+          exit 1
+        fi
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # the tags, to find the previous release
+
+    - name: Work out the tag and the previous release
+      id: tag
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        TAG="ShimmerSwiftAPI_v$VERSION"
+        if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+          echo "::error::$TAG already exists"
+          exit 1
+        fi
+        # Only this product's tags: the repository also carries ShimmerBLEGrpc_v* and v0.0.1
+        PREVIOUS=$(git tag --list 'ShimmerSwiftAPI_v*' --sort=-v:refname | head -n 1)
+        if [ -n "$PREVIOUS" ]; then
+          # Field by field, numerically: portable to the macOS runner's sort, unlike -V
+          HIGHEST=$(printf '%s\n%s\n' "${PREVIOUS#ShimmerSwiftAPI_v}" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          if [ "$HIGHEST" != "$VERSION" ]; then
+            echo "::error::$VERSION is not above the last release, $PREVIOUS"
+            exit 1
+          fi
+        fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+        echo "Releasing $TAG at $GITHUB_SHA, after ${PREVIOUS:-no earlier release}"
+
+    # The same gate as swift.yml, on the commit being released
+    - name: Test
+      run: xcodebuild test -scheme ShimmerBluetoothTests
+
+    # GitHub's generated "What's Changed" list, as the earlier releases used, counted
+    # from the last Swift API release rather than whichever release came last
+    - name: Release notes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ steps.tag.outputs.tag }}
+        PREVIOUS: ${{ steps.tag.outputs.previous }}
+      run: |
+        if [ -n "$PREVIOUS" ]; then
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" -f previous_tag_name="$PREVIOUS" \
+            --jq .body > notes.md
+        else
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+            --jq .body > notes.md
+        fi
+        {
+          echo "## $TAG"
+          echo
+          cat notes.md
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Create the release
+      if: ${{ !inputs.dry_run }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ steps.tag.outputs.tag }}
+        PRERELEASE: ${{ inputs.prerelease }}
+      run: |
+        if [ "$PRERELEASE" = "true" ]; then
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md --prerelease
+        else
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+        fi
