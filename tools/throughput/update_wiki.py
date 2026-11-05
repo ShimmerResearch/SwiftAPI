@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Turn a ThroughputRunner CSV into new tables on the BLE-Throughput wiki page.
 
-One table per hardware (Shimmer3, Shimmer3R) per release, inserted above "# Notes". Old tables are
-never touched. Re-running for the same release and hardware replaces that table, so there are no
-duplicates.
+One table per release, numbered after the last "# Test Results N" on the page and inserted above
+"# Notes", with every hardware's rows in it (Shimmer3 first). Old tables are never touched.
+Re-running for the same release replaces that hardware's rows in its table and keeps the others, so
+there are no duplicates.
 
 Dry run by default: prints the diff and changes nothing. --commit commits in the local wiki clone.
 It never pushes. Push the wiki yourself after reading the diff.
@@ -31,8 +32,8 @@ COLUMNS = ["Equipment", "Shimmer Device", "FW Version", "Radio Type", "Sensors E
            "OS Version", "Distance between devices (approximate)"]
 
 
-def marker(release: str, hw: str) -> str:
-    return f"<!-- throughput:{release}:{hw} -->"
+def marker(release: str) -> str:
+    return f"<!-- throughput:{release} -->"
 
 
 def build_rows(rows):
@@ -56,9 +57,10 @@ def build_rows(rows):
     return tables, problems
 
 
-def render(hw, release, number, cells):
-    head = f"# Test Results {number} For Different Sensor Configurations ({hw}, {release})"
-    lines = [marker(release, hw), head,
+def render(release, number, cells):
+    hws = ", ".join(h for h in HW_ORDER if any(c[1] == h for c in cells))
+    head = f"# Test Results {number} For Different Sensor Configurations ({hws}, {release})"
+    lines = [marker(release), head,
              "| " + " | ".join(COLUMNS) + " |",
              "| " + " | ".join("---" for _ in COLUMNS) + " |"]
     lines += ["| " + " | ".join(c) + " |" for c in cells]
@@ -66,26 +68,26 @@ def render(hw, release, number, cells):
 
 
 def apply(text, release, tables):
-    """Replace this release's tables, or insert new ones above '# Notes'."""
+    """Replace this release's rows in its table, or add a new table above '# Notes'."""
+    existing = re.search(re.escape(marker(release)) + r"\n# Test Results (\d+).*?(?=\n\n|\n# |\Z)", text, re.S)
+    rows = {}
+    if existing:
+        # Keep the rows of hardware this CSV did not test.
+        for line in existing.group(0).splitlines()[4:]:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) == len(COLUMNS) and cells[1] not in tables:
+                rows.setdefault(cells[1], []).append(cells)
+    rows.update(tables)
+    cells = [c for hw in HW_ORDER for c in rows.get(hw, [])]
+    if existing:
+        n = int(existing.group(1))
+        return text[:existing.start()] + render(release, n, cells).rstrip("\n") + text[existing.end():]
     numbers = [int(n) for n in re.findall(r"^# Test Results (\d+)", text, re.M)]
-    next_n = max(numbers, default=0) + 1
-    for hw in HW_ORDER:
-        if hw not in tables:
-            continue
-        m = marker(release, hw)
-        existing = re.search(re.escape(m) + r"\n# Test Results (\d+).*?(?=\n\n|\n# |\Z)", text, re.S)
-        if existing:
-            n = int(existing.group(1))
-            text = text[:existing.start()] + render(hw, release, n, tables[hw]).rstrip("\n") + text[existing.end():]
-        else:
-            block = render(hw, release, next_n, tables[hw]) + "\n"
-            next_n += 1
-            notes = re.search(r"^# Notes", text, re.M)
-            if notes:
-                text = text[:notes.start()] + block + text[notes.start():]
-            else:
-                text = text.rstrip("\n") + "\n\n" + block
-    return text
+    block = render(release, max(numbers, default=0) + 1, cells) + "\n"
+    notes = re.search(r"^# Notes", text, re.M)
+    if notes:
+        return text[:notes.start()] + block + text[notes.start():]
+    return text.rstrip("\n") + "\n\n" + block
 
 
 def git(wiki, *args, check=True):

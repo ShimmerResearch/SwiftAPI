@@ -65,9 +65,11 @@ The CSV is saved as `throughput_<date>_<time>.csv` in the app's Documents folder
 CSV** (AirDrop to the Mac), or Finder > iPhone > Files > TestApp.
 
 ## Wiki update (`tools/throughput/update_wiki.py`)
-Python 3, stdlib only, runs on the Mac. Adds one table per hardware per release, above `# Notes`:
-`# Test Results N ... (Shimmer3, ShimmerSwiftAPI_vX.Y.Z)`. Old tables are never touched. A hidden
-marker comment per table makes a re-run replace that table instead of duplicating it.
+Python 3, stdlib only, runs on the Mac. Adds one table per release, numbered after the last one on
+the page and placed above `# Notes`, with every device's rows in it:
+`# Test Results N ... (Shimmer3, Shimmer3R, ShimmerSwiftAPI_vX.Y.Z)`. Old tables are never touched.
+A hidden marker comment per table makes a re-run for the same release replace the rows of the
+devices it tested and keep the others, instead of adding a table.
 
 ```
 python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0
