@@ -1,26 +1,36 @@
-# BLE throughput test automation (draft)
+# BLE throughput test automation
 
-Goal: fill the wiki's BLE-Throughput tables for a new Shimmer3 / Shimmer3R firmware with one command
-and almost no human steps. Status: TestApp builds with the runner (checked locally on a Mac with Xcode 26.6). **Not yet run
-against a Shimmer.**
+Fills the wiki's [BLE-Throughput](https://github.com/ShimmerResearch/SwiftAPI/wiki/BLE-Throughput)
+page from a run of TestApp on an iPhone. Status: run on an iPhone X (iOS 16.7.16) against a
+Shimmer3 (L&S v1.01.009, RN4678) and a Shimmer3R (L&S v1.01.025, IF820), 2026-11-04 and -05.
 
-## Human steps (all that remain)
-1. Flash the firmware under test (Shimmer3 v1.01.009, Shimmer3R v1.01.025) and power the board on.
-2. Plug in and unlock the iPhone; put the board about 2.5 m away. Tap Allow on the first-launch
+## Steps
+1. **Build:** open `Shimmer.xcworkspace`, pick the **TestApp** scheme and the iPhone, set a team
+   under Signing & Capabilities (do not commit it), and press Run (Cmd+R). Tap Allow on the
    Bluetooth prompt, once per install.
-3. In TestApp tap **Throughput Test**, then **Scan for Shimmers**, tick one or more devices, and tap
-   **Run**. Devices are tested one after another into one CSV.
-4. Run `tools/throughput/update_wiki.py` (below), read the diff, then push the wiki yourself.
+2. **Devices:** flash the firmware under test, power the boards on, and put them about 2.5 m from the
+   phone.
+3. **Run:** in TestApp tap **Throughput Test**, **Scan for Shimmers**, tick the devices, turn
+   **Quick check** off, set **Distance** if it is not 2.5 m, and tap **Run** (about 3 min per
+   device). Keep the app open; the phone stays awake by itself.
+4. **CSV:** tap **Share CSV** and AirDrop it to the Mac (it lands in `~/Downloads`). Every PRR cell
+   should be a percentage; a cell saying `failed after n tries` means that setting never passed, so
+   re-run that device before publishing.
+5. **Publish:** from the repo root,
+   ```
+   python3 tools/throughput/update_wiki.py ~/Downloads/throughput_<date>_<time>.csv --push
+   ```
+   Check the printed API release and table, then answer `y`. Details under *Wiki update* below.
 
 ## Automated
 - Scan lists every advertising device whose name starts with `Shimmer`; connect by BLE name
   (`BluetoothManager.startScanning(deviceName:)`), one retry.
 - Record FW, hardware, Bluetooth radio (`0xA1` -> e.g. `RN4678 v1.23`, `IF820 v01.04.16.16`),
-  expansion board, iOS and app version from the device, not from typing.
+  expansion board and iOS version, and the phone model, from the devices, not from typing.
 - For each config (one run, retried if it fails): set CRC, then rate, then sensors, stream, count, stop.
 - Write the wiki table itself as CSV: the wiki's 12 columns, one row per device and CRC setting.
-  Packet Reception Rate is the API PRR of the ok run, otherwise `failed after n tries: reasons`. Per-run detail (received counts, raw PRR, retries) is only in the
-  app's log, not the CSV.
+  Packet Reception Rate is the API PRR of the ok run, otherwise `failed after n tries: reasons`.
+  Per-run detail (received counts, raw PRR, retries) is only in the app's log, not the CSV.
 - `tools/throughput/update_wiki.py` copies the publishable rows into new wiki tables.
 
 ## Accuracy rules
@@ -33,9 +43,9 @@ against a Shimmer.**
   only the ok run is reported. The runner still supports `repeats` > 1, in which case the PRR is the
   median and every run must be ok.
 - **Retries.** A run that is not `ok` is tried again up to 3 times (`maxRetries`), reconnecting
-  first if the link dropped. Only the last try counts; if every try failed, the setting's PRR cell
-  says `incomplete`, never a number.
-- **Wall time recorded** next to the nominal duration.
+  first if the link dropped, or the device stopped streaming by itself, or a stop was refused. Only
+  the ok try counts; if every try failed, the setting's PRR cell says `failed after n tries`, never a
+  number.
 
 ## Required API change (in this branch)
 `Shimmer3Protocol` keeps `CurrentSamplingRate` and `PacketSize` internal, and `connect()` always
@@ -46,23 +56,23 @@ the existing `setCRCMode` / `getCRCMode`. Added: `currentSamplingRate`, `packetS
 Note: Shimmer3R v1.01.025 is above v1.00.050, so 2-byte is its strongest safe CRC and 1-byte is
 allowed. Shimmer3 always allows 2-byte.
 
-## To finish
-- Check that a CRC change after connect survives `sendSetSensorsCommand`'s inquiry on both boards
-  (a run with the wrong CRC is caught by the packet-size gate and written as `size-mismatch`).
-- A connect that fails at the CoreBluetooth level never resumes `BluetoothManager.connect`, so the
-  run hangs rather than writing `connect-failed`. Kill the app and untick that device.
+## Known issues
+- Shimmer3R with 1-byte CRC has dropped the link mid-run on some runs (2026-11-04, and on every retry
+  of one run on 2026-11-05 with v1.1.0). Cause not found yet.
+- `Shimmer3Protocol` has no command timeout of its own; the runner wraps each command in one and
+  reconnects when one expires.
 
 Checked: `SENSOR_INT_A1` (0x0100) enables channel `InternalAdc1` (0x12), which is internal ADC A13,
 the wiki's PPG channel. 6 accel + 2 GSR + 2 PPG = 10 payload bytes.
 
 ## Run
-Open `Shimmer.xcworkspace`, select the **TestApp** scheme and the iPhone, set a team under Signing &
-Capabilities, and Run. **Quick check** (on by default) does 10 s x 1 run per CRC mode as a smoke test;
-turn it off for the wiki matrix (1 x 60 s per CRC mode, retried if it fails, about 3 min per device). The phone is kept
-awake during a run.
+**Quick check** (on by default) does 10 s x 1 run per CRC mode as a smoke test; its rows are never
+published. Turn it off for wiki results: 1 x 60 s per CRC mode, retried if it fails, about 3 min per
+device.
 
-The CSV is saved as `throughput_<date>_<time>.csv` in the app's Documents folder. Get it with **Share
-CSV** (AirDrop to the Mac), or Finder > iPhone > Files > TestApp.
+The CSV is saved as `throughput_<date>_<time>.csv` (`_quick` for a quick check) in the app's
+Documents folder. Get it with **Share CSV** (AirDrop to the Mac), or Finder > iPhone > Files >
+TestApp.
 
 ## Wiki update (`tools/throughput/update_wiki.py`)
 Python 3, stdlib only, runs on the Mac. One table per API release, numbered after the last one on
