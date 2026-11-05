@@ -110,10 +110,10 @@ public class BluetoothManager: NSObject {
         
         self.centralManager.connect(activePeripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey : NSNumber(value: true)])
         return await withCheckedContinuation { continuation in
-            if self.continuation == nil {
-                // 2
-                self.continuation = continuation
-            }
+            // A connect that never completed (CoreBluetooth never times one out) is given up on
+            // here, so it cannot take this attempt's didConnect.
+            self.continuation?.resume(returning: false)
+            self.continuation = continuation
         }
     }
     
@@ -185,6 +185,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
     }*/
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         print("[ERROR] Could not connecto to peripheral \(peripheral.identifier.uuidString)")
+        self.continuation?.resume(returning: false)
+        self.continuation = nil
         let pname = peripheral.name
         delegates![pname!]!?.isDisconnected()
     }

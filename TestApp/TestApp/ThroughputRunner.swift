@@ -31,7 +31,7 @@ struct ThroughputRow {
     var prrApi = 0.0             // the API's own trial PRR, clamped to 100
     var prrRaw = 0.0             // received / expected, NOT clamped, so >100% is visible
     var wallSeconds = 0.0
-    var status = "ok"            // ok | connect-failed | config-failed | size-mismatch | stalled | disconnected | stop-timeout
+    var status = "ok"            // ok | connect-failed | config-failed | size-mismatch | stalled | disconnected | device-stopped | stop-timeout | stop-failed
 }
 
 /// Whichever of an operation and its timer finishes first resumes; the other does nothing.
@@ -49,6 +49,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     /// Shimmer3Protocol has no command timeout, so a reply that never comes leaves its pending
     /// command suspended and refuses every later one on that instance.
     private var linkUp = false
+    private var deviceStreaming = false   // false once the device reports it left STREAMING
     /// Called with a one-line status as the run moves on (device, config, run number).
     var onProgress: ((String) -> Void)?
     /// A run that is not ok is tried again up to this many times; only the last try is recorded.
@@ -129,7 +130,13 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         var base = ThroughputRow(); base.device = deviceName; base.ios = ios; base.app = appVersion
         var connected = false
         onProgress?("\(deviceName): connecting")
-        for _ in 0..<2 where !connected { connected = await connect(deviceName: deviceName) }   // one retry
+        for attempt in 0..<2 where !connected {   // one retry
+            if attempt > 0 {
+                await disconnect()   // drop the first attempt, or the retry finds the peripheral half-connected
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            connected = await connect(deviceName: deviceName)
+        }
         guard connected, var p = proto else {
             onProgress?("\(deviceName): connect failed")
             base.status = "connect-failed"; return [base]
@@ -184,7 +191,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         var r = rowIn
         // Order matters: PacketSize is fixed at inquiry and includes the CRC, so the CRC goes first
         // and the sensor command (which re-runs inquiry) goes last.
-        guard await withTimeout(15, { await p.sendSetCRCMode(cfg.crc) }) == true,
+        guard await withTimeout(15, { await p.setCRCMode(cfg.crc) }) == true,
               await withTimeout(15, { await p.sendSetSamplingRateCommand(samplingRate: cfg.rateHz) == true }) == true,
               await withTimeout(15, { await p.sendSetSensorsCommand(sensorBitmap: cfg.sensorBitmap) }) == true else {
             r.status = linkUp ? "config-failed" : "disconnected"; return r
@@ -192,7 +199,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         // Accuracy gate: the packet on the wire must be the size the config implies.
         r.expectedPacketBytes = 1 + p.TimeStampPacketByteSize + cfg.payloadBytes + Int(cfg.crc.rawValue)
         r.packetBytes = p.packetSizeBytes
-        guard r.packetBytes == r.expectedPacketBytes, p.currentCRCMode == cfg.crc,
+        guard r.packetBytes == r.expectedPacketBytes, p.getCRCMode() == cfg.crc,
               p.currentSamplingRate == cfg.rateHz else {
             r.status = "size-mismatch"; return r      // wrong sensors enabled: do not report a PRR
         }
@@ -201,8 +208,9 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         guard await withTimeout(15, { await p.sendStartStreamingCommand() == true }) == true else {
             r.status = linkUp ? "config-failed" : "disconnected"; return r
         }
-        // One-second steps so a dropped link ends the run now, not after the full duration.
-        while linkUp && Date().timeIntervalSince(t0) < Double(cfg.seconds) {
+        deviceStreaming = true
+        // One-second steps so a dropped link, or the device ending the stream, ends the run now.
+        while linkUp && deviceStreaming && Date().timeIntervalSince(t0) < Double(cfg.seconds) {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         r.wallSeconds = Date().timeIntervalSince(t0)
@@ -210,8 +218,15 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         r.prrApi = p.packetReceptionRateOverall
         if !linkUp {
             r.status = "disconnected"   // counts so far are kept, but the row is not a result
-        } else if await withTimeout(10, { await p.sendStopStreamingCommand() == true }) == nil {
-            r.status = "stop-timeout"   // the stream ran its full time, but the stop was never ACKed
+        } else if !deviceStreaming {
+            r.status = "device-stopped" // docked, button, low battery: a partial run, not a result
+        } else {
+            switch await withTimeout(10, { await p.sendStopStreamingCommand() }) {
+            case nil:  r.status = "stop-timeout"   // the stream ran its full time, but the stop was never ACKed
+            case .some(.some(true)): break
+            default:                               // refused: the device may still be streaming
+                r.status = "stop-failed"; linkUp = false   // reconnect before the next run
+            }
         }
 
         // Same expectation the API uses (device timestamps), but kept unclamped.
@@ -246,6 +261,9 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     nonisolated func shimmerProtocolNewMessage(message: String) {}
     nonisolated func shimmerProtocolNewObjectCluster(message: ObjectCluster) {}
     nonisolated func shimmerBTStateChange(message: Shimmer3Protocol.Shimmer3BTState) {
-        if message == .DISCONNECTED { Task { @MainActor in self.linkUp = false } }
+        Task { @MainActor in
+            if message == .DISCONNECTED { self.linkUp = false }
+            if message != .STREAMING { self.deviceStreaming = false }   // e.g. a status push ended the stream
+        }
     }
 }

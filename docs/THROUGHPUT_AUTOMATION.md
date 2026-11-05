@@ -37,10 +37,10 @@ against a Shimmer.**
 - **Wall time recorded** next to the nominal duration.
 
 ## Required API change (in this branch)
-`Shimmer3Protocol` keeps `sendCRCCommand`, `CRCMode`, `CurrentSamplingRate` and `PacketSize` private
-or internal, and `connect()` always picks the strongest safe CRC. The wiki rows need 1-byte and
-2-byte CRC. Added: `sendSetCRCMode`, `currentCRCMode`, `currentSamplingRate`, `packetSizeBytes`,
-and `numberOfPackets` is now `public private(set)`.
+`Shimmer3Protocol` keeps `CurrentSamplingRate` and `PacketSize` internal, and `connect()` always
+picks the strongest safe CRC. The wiki rows need 1-byte and 2-byte CRC, which the runner sets with
+the existing `setCRCMode` / `getCRCMode`. Added: `currentSamplingRate`, `packetSizeBytes`, and
+`numberOfPackets` is now `public private(set)`.
 
 Note: Shimmer3R v1.01.025 is above v1.00.050, so 2-byte is its strongest safe CRC and 1-byte is
 allowed. Shimmer3 always allows 2-byte.
