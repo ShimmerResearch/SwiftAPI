@@ -18,6 +18,7 @@ struct ThroughputView: View {
     @State private var scanning = false
     @State private var running = false
     @State private var quick = true
+    @State private var distance = "2.5 m"
     @State private var log: [String] = []
     @State private var status = ""
     @State private var statusSince = Date()
@@ -56,6 +57,10 @@ struct ThroughputView: View {
 
                 Section {
                     Toggle("Quick check (10 s, 1 run)", isOn: $quick).disabled(running)
+                    HStack {
+                        Text("Distance")
+                        TextField("2.5 m", text: $distance).multilineTextAlignment(.trailing).disabled(running)
+                    }
                     Button(running ? "Running..." : "Run on \(selected.count) device(s)") { Task { await run() } }
                         .disabled(selected.isEmpty || running || scanning)
                     if let csvURL {
@@ -105,7 +110,7 @@ struct ThroughputView: View {
         let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let rows = await runner.run(deviceNames: selected.sorted(), matrix: matrix,
                                     appVersion: app, ios: osVersion(), phone: Self.phoneModel())
-        csvURL = save(ThroughputRunner.csv(rows))
+        csvURL = save(ThroughputRunner.csv(rows, distance: distance))
         log.append(csvURL.map { "Saved \($0.lastPathComponent)" } ?? "Could not save the CSV")
 
         setIdleTimerDisabled(false)

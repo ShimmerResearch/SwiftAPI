@@ -10,14 +10,13 @@ It never pushes. Push the wiki yourself after reading the diff.
 
     python update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --wiki ./SwiftAPI.wiki
 
-The Equipment cell comes from the CSV's phone column (read by the app) and the radio cell from its
-radio column (read from the device). --phone and --radio HW=VERSION override them, and are needed
-for CSVs written before those columns existed.
+The CSV is the app's export: the wiki's own columns, one row per setting, copied as they are. A row
+whose Packet Reception Rate is not a percentage (incomplete, connect failed) or whose Streaming
+Duration is not 60 s (a quick check) is skipped with a warning.
 """
 import argparse
 import csv
 import re
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -36,51 +35,24 @@ def marker(release: str, hw: str) -> str:
     return f"<!-- throughput:{release}:{hw} -->"
 
 
-def fw_cell(hw: str, fw: str) -> str:
-    """CSV holds major.minor.internal, e.g. 1.1.9. The wiki writes v1.01.009."""
-    major, minor, internal = (int(x) for x in fw.split("."))
-    return f"L&S {hw} v{major}.{minor:02d}.{internal:03d}"
-
-
-def num(x: float) -> str:
-    return f"{x:g}"
-
-
-def build_rows(rows, release, phone, radios, distance, min_runs):
-    """Group ok runs by hardware. Return ({hw: [row cells]}, [problems])."""
-    problems = []
-    skipped = [r for r in rows if r["status"] != "ok"]
-    for r in skipped:
-        problems.append(f"skipped {r['hw'] or '?'} {r['config']} crc={r['crc']} run={r['run']}: {r['status']}")
-
-    groups = defaultdict(list)
+def build_rows(rows):
+    """Group publishable rows by hardware. Return ({hw: [row cells]}, [problems])."""
+    tables, problems = defaultdict(list), []
     for r in rows:
-        if r["status"] == "ok":
-            groups[(r["hw"], r["config"], int(r["crc"]), float(r["rate_hz"]), int(r["seconds"]))].append(r)
-
-    tables = defaultdict(list)
-    for (hw, config, crc, rate, secs), g in sorted(groups.items(), key=lambda kv: (HW_ORDER.index(kv[0][0]), kv[0][2])):
-        if len(g) < min_runs:
-            problems.append(f"{hw} {config} crc={crc}: {len(g)} ok run(s), need {min_runs}")
-            continue
-        if len({x["fw"] for x in g}) != 1 or len({x["packet_bytes"] for x in g}) != 1:
-            problems.append(f"{hw} {config} crc={crc}: runs disagree on firmware or packet size")
-            continue
-        csv_radios = {x.get("radio", "") for x in g} - {""}   # older CSVs have no radio column
-        if len(csv_radios) > 1 and hw not in radios:
-            problems.append(f"{hw} {config} crc={crc}: runs disagree on radio {sorted(csv_radios)}; pass --radio")
-            continue
-        radio = radios.get(hw) or next(iter(csv_radios), None)
-        if not radio:
-            problems.append(f"no radio for {hw}: not in the CSV and no --radio given")
-            continue
-        prr = statistics.median(float(x["prr_api"]) for x in g)
-        first = g[0]
-        tables[hw].append([
-            phone, hw, fw_cell(hw, first["fw"]), radio, config,
-            f"{crc} byte" + ("" if crc == 1 else "s"), f"{first['packet_bytes']} bytes",
-            f"{num(rate)} Hz", f"{secs} s", f"{round(prr)}%", first["ios"], distance,
-        ])
+        cells = [r[c] for c in COLUMNS]
+        hw, prr, secs = r["Shimmer Device"], r["Packet Reception Rate"], r["Streaming Duration"]
+        what = f"{hw} {r['Sensors Enabled']} {r['CRC Bytes']}"
+        if hw not in HW_ORDER:
+            problems.append(f"skipped {what}: unknown device {hw!r} ({prr})")
+        elif not re.fullmatch(r"\d+%", prr):
+            problems.append(f"skipped {what}: {prr}")
+        elif secs != "60 s":
+            problems.append(f"skipped {what}: {secs} is a quick check, not a wiki result")
+        elif "," in r["Equipment"]:   # a raw model identifier such as iPhone18,3
+            problems.append(f"skipped {what}: phone {r['Equipment']!r} is a raw model identifier; "
+                            "add it to the app's phone table")
+        else:
+            tables[hw].append(cells)
     return tables, problems
 
 
@@ -124,34 +96,23 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", required=True, type=Path)
     ap.add_argument("--release", required=True, help="e.g. ShimmerSwiftAPI_v1.1.0")
-    ap.add_argument("--phone", help='Equipment cell, e.g. "iPhone 12". Overrides the CSV phone column')
-    ap.add_argument("--radio", action="append", default=[], metavar="HW=VERSION",
-                    help='e.g. Shimmer3="RN4678 v1.23" (repeat per hardware). Overrides the CSV radio column; '
-                         'only needed for CSVs without one')
-    ap.add_argument("--distance", default="2.5 m")
-    ap.add_argument("--min-runs", type=int, default=3, help="ok runs needed per config (default 3)")
     ap.add_argument("--wiki", type=Path, help="existing wiki clone (default: clone to a temp dir)")
     ap.add_argument("--commit", action="store_true", help="commit in the wiki clone. Never pushes.")
     a = ap.parse_args()
 
-    radios = dict(r.split("=", 1) for r in a.radio)
     with a.csv.open(newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        if reader.fieldnames != COLUMNS:
+            sys.exit(f"{a.csv} is not the app's wiki-column CSV (columns: {reader.fieldnames})")
+        rows = list(reader)
     if not rows:
         sys.exit("CSV has no rows")
-    phones = {r.get("phone", "") for r in rows} - {""}   # older CSVs have no phone column
-    if not a.phone:
-        if len(phones) != 1:
-            sys.exit(f"CSV names {sorted(phones) or 'no'} phone(s); pass --phone")
-        a.phone = phones.pop()
-        if "," in a.phone:   # a raw identifier such as iPhone18,3: the app's name table is out of date
-            print(f"WARNING: phone is the raw model identifier {a.phone!r}; pass --phone to name it", file=sys.stderr)
 
-    tables, problems = build_rows(rows, a.release, a.phone, radios, a.distance, a.min_runs)
+    tables, problems = build_rows(rows)
     for p in problems:
         print("WARNING:", p, file=sys.stderr)
     if not tables:
-        sys.exit("nothing to write: no hardware had a complete set of ok runs")
+        sys.exit("nothing to write: no row is a complete 60 s result")
 
     wiki = a.wiki
     if wiki is None:

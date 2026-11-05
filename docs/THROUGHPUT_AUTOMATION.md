@@ -18,8 +18,11 @@ against a Shimmer.**
 - Record FW, hardware, Bluetooth radio (`0xA1` -> e.g. `RN4678 v1.23`, `IF820 v01.04.16.16`),
   expansion board, iOS and app version from the device, not from typing.
 - For each config and each of N repeats: set CRC, then rate, then sensors, stream, count, stop.
-- Write a CSV with every run.
-- `tools/throughput/update_wiki.py` turns the CSV into new wiki tables (median of the runs).
+- Write the wiki table itself as CSV: the wiki's 12 columns, one row per device and CRC setting.
+  Packet Reception Rate is the median of the runs' API PRR when every run ended ok, otherwise
+  `incomplete (n/m ok: reasons)`. Per-run detail (received counts, raw PRR, retries) is only in the
+  app's log, not the CSV.
+- `tools/throughput/update_wiki.py` copies the publishable rows into new wiki tables.
 
 ## Accuracy rules
 - **Order is CRC, rate, sensors.** `PacketSize` includes the CRC and is fixed at inquiry, and
@@ -27,13 +30,11 @@ against a Shimmer.**
 - **Packet-size gate.** Wire size must equal `1 + 3 + payload + CRC` (15 / 16 bytes for LN Accel +
   GSR + PPG, as on the wiki). A mismatch means the wrong sensors are on, and the run is rejected, not
   reported.
-- **Unclamped PRR.** The API clamps PRR to 100%. The CSV also keeps received, expected and the raw
-  ratio, so over-100% (a timing or rate fault) is visible.
 - **Repeats and median.** 3 runs per config. The wiki notes a +/-8% tolerance at high throughput; one
   run is not a result.
 - **Retries.** A run that is not `ok` is tried again up to 3 times (`maxRetries`), reconnecting
-  first if the link dropped. Only the last try is written, with its `attempts` count; if every try
-  failed, that failure is written with its status, never dropped.
+  first if the link dropped. Only the last try counts; if every try failed, the setting's PRR cell
+  says `incomplete`, never a number.
 - **Wall time recorded** next to the nominal duration.
 
 ## Required API change (in this branch)
@@ -71,16 +72,14 @@ marker comment per table makes a re-run replace that table instead of duplicatin
 ```
 python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0
 ```
-- The Equipment cell comes from the CSV's `phone` column, which the app fills from the iOS model
-  identifier (e.g. `iPhone10,3` -> "iPhone X"). A model missing from the app's table is written as
-  the raw identifier and the script warns; `--phone "iPhone 12"` overrides it, and is needed for CSVs
-  written before that column existed.
-- The Radio Type cell comes from the CSV's `radio` column. `--radio Shimmer3="RN4678 v1.23"` overrides
-  it, and is needed for CSVs written before that column existed.
+- Every cell comes from the app. Equipment is the phone model from the iOS model identifier
+  (e.g. `iPhone10,3` -> "iPhone X"), Radio Type is read from the device (`0xA1`), and Distance is the
+  app's Distance field (default 2.5 m).
+- Rows are skipped with a warning when PRR is not a percentage (incomplete, connect failed), the
+  duration is not 60 s (a quick check), or the phone is a raw identifier missing from the app's table.
+- CSVs from before this format (per-run columns) are refused.
 - Dry run by default: prints the diff, changes nothing. `--commit` commits in the local wiki clone.
   **It never pushes.** Review the diff, then `git -C <wiki> push` yourself.
-- Only `ok` runs count. Each config needs `--min-runs` (default 3) ok runs, and the runs must agree on
-  firmware and packet size. Anything skipped is listed as a warning.
 - `--wiki <clone>` uses an existing clone (must be clean); otherwise it clones to a temp folder.
-- Tested on Windows against a copy of the real wiki with a made-up CSV: dry run, commit, no-op re-run
-  and in-place replace all behave. It has not seen real runner output yet.
+- Checked on the Mac against the live wiki with the 2026-11-05 results converted to this format:
+  no change to tables 5 and 6; incomplete and quick-check rows skipped.

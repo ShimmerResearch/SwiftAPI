@@ -6,7 +6,7 @@
 //
 //  Runs the BLE-Throughput wiki matrix against one or more Shimmer3 / Shimmer3R, found by name, one
 //  device after another: scan, connect, record versions, then for each config set CRC -> rate ->
-//  sensors, stream, count, stop. Writes a CSV for tools/throughput/update_wiki.py.
+//  sensors, stream, count, stop. Writes the wiki table as CSV for tools/throughput/update_wiki.py.
 //
 import Foundation
 import CoreBluetooth
@@ -238,17 +238,64 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     }
 
     // MARK: output
-    static func csv(_ rows: [ThroughputRow]) -> String {
-        let head = "device,hw,fw,radio,exp_board,app,phone,ios,config,crc,rate_hz,seconds,run,attempts,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
-        let lines = rows.map { r in
-            [r.device, r.hw, r.fw, "\"\(r.radio)\"", r.expBoard, r.app, "\"\(r.phone)\"", r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
-             "\(r.packetBytes)", "\(r.expectedPacketBytes)", "\(r.received)", "\(r.expected)",
-             String(format: "%.1f", r.prrApi), String(format: "%.1f", r.prrRaw), String(format: "%.1f", r.wallSeconds), r.status].joined(separator: ",")
+    /// The wiki's BLE-Throughput columns, in its order. One row per device and setting.
+    static let wikiColumns = ["Equipment", "Shimmer Device", "FW Version", "Radio Type", "Sensors Enabled",
+                              "CRC Bytes", "Number of Bytes", "Sampling Rate", "Streaming Duration",
+                              "Packet Reception Rate", "OS Version", "Distance between devices (approximate)"]
+
+    /// The wiki table as CSV. Each setting's runs become one row: Packet Reception Rate is the
+    /// median of the runs' API PRR when every run ended ok, otherwise "incomplete (n/m ok)" or the
+    /// failure, so a setting that did not finish can never pass for a result.
+    static func csv(_ rows: [ThroughputRow], distance: String) -> String {
+        var order: [String] = []
+        var groups: [String: [ThroughputRow]] = [:]
+        for r in rows {
+            let key = "\(r.device)|\(r.config)|\(r.crc)|\(r.rateHz)|\(r.seconds)"
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(r)
         }
-        return ([head] + lines).joined(separator: "\n")
+        let lines = order.map { key -> String in
+            let g = groups[key]!, first = g[0]
+            let ok = g.filter { $0.status == "ok" }
+            let prr: String
+            if first.status == "connect-failed" && g.count == 1 && first.config.isEmpty {
+                prr = "connect failed"
+            } else if ok.count == g.count {
+                let v = ok.map(\.prrApi).sorted()
+                let median = v.count % 2 == 1 ? v[v.count / 2] : (v[v.count / 2 - 1] + v[v.count / 2]) / 2
+                prr = "\(Int(median.rounded()))%"
+            } else {
+                let reasons = Set(g.map(\.status)).subtracting(["ok"]).sorted().joined(separator: ", ")
+                prr = "incomplete (\(ok.count)/\(g.count) ok: \(reasons))"
+            }
+            let bytes = (ok.first ?? first).packetBytes
+            let cells = [
+                first.phone,
+                first.hw.isEmpty ? first.device : first.hw,
+                fwCell(hw: first.hw, fw: first.fw),
+                first.radio,
+                first.config,
+                first.crc == 0 ? "" : "\(first.crc) byte\(first.crc == 1 ? "" : "s")",
+                bytes == 0 ? "" : "\(bytes) bytes",
+                first.rateHz == 0 ? "" : "\(Int(first.rateHz)) Hz",
+                first.seconds == 0 ? "" : "\(first.seconds) s",
+                prr,
+                first.ios,
+                distance,
+            ]
+            return cells.map(quote).joined(separator: ",")
+        }
+        return ([wikiColumns.map(quote).joined(separator: ",")] + lines).joined(separator: "\n")
     }
 
-    // Wiki rows are built by tools/throughput/update_wiki.py from this CSV.
+    /// "1.1.9" on a Shimmer3 -> "L&S Shimmer3 v1.01.009", as the wiki writes it.
+    private static func fwCell(hw: String, fw: String) -> String {
+        let n = fw.split(separator: ".").compactMap { Int($0) }
+        guard n.count == 3 else { return fw }
+        return "L&S \(hw) v\(n[0]).\(String(format: "%02d", n[1])).\(String(format: "%03d", n[2]))"
+    }
+
+    private static func quote(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
 
     // MARK: delegates
     // nonisolated: Shimmer3Protocol calls these from its background processing queue, not the
