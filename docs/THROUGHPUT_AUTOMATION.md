@@ -66,8 +66,9 @@ CSV** (AirDrop to the Mac), or Finder > iPhone > Files > TestApp.
 
 ## Wiki update (`tools/throughput/update_wiki.py`)
 Python 3, stdlib only, runs on the Mac. One table per API release, numbered after the last one on
-the page and placed above `# Notes`, with the release in its heading:
-`# Test Results N ... (Shimmer3, Shimmer3R, ShimmerSwiftAPI_vX.Y.Z)`. A later run for the same release
+the page and placed above `# Notes`: `# Test Results N ... (Shimmer3, Shimmer3R)`. The wiki table has
+the CSV's columns plus **API Release** after Equipment, filled from `--release`, since the app does
+not know which release it was built from. A later run for the same release
 (another phone, a re-test) adds its rows to that table, grouped by device; rows already there are not
 repeated and none are removed. A new release starts the next number. Other tables are never touched.
 

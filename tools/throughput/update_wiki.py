@@ -2,7 +2,7 @@
 """Turn a ThroughputRunner CSV into new tables on the BLE-Throughput wiki page.
 
 One table per API release, numbered after the last "# Test Results N" on the page and inserted above
-"# Notes", with the release in its heading. A later run for the same release adds its rows to that
+"# Notes". Each row notes the API release in an "API Release" column after Equipment. A later run for the same release adds its rows to that
 release's table (grouped by hardware, Shimmer3 first); rows already in it are not repeated, and no
 row is ever removed. Other tables are never touched.
 
@@ -30,17 +30,21 @@ HW_ORDER = ["Shimmer3", "Shimmer3R"]
 COLUMNS = ["Equipment", "Shimmer Device", "FW Version", "Radio Type", "Sensors Enabled", "CRC Bytes",
            "Number of Bytes", "Sampling Rate", "Streaming Duration", "Packet Reception Rate",
            "OS Version", "Distance between devices (approximate)"]
+# The wiki table is the app's CSV columns plus the API release, which the app cannot know: it comes
+# from --release.
+WIKI_COLUMNS = COLUMNS[:1] + ["API Release"] + COLUMNS[1:]
+DEVICE = WIKI_COLUMNS.index("Shimmer Device")
 
 
 def marker(release: str) -> str:
     return f"<!-- throughput:{release} -->"
 
 
-def build_rows(rows):
+def build_rows(rows, release):
     """Group publishable rows by hardware. Return ({hw: [row cells]}, [problems])."""
     tables, problems = defaultdict(list), []
     for r in rows:
-        cells = [r[c] for c in COLUMNS]
+        cells = [release if c == "API Release" else r[c] for c in WIKI_COLUMNS]
         hw, prr, secs = r["Shimmer Device"], r["Packet Reception Rate"], r["Streaming Duration"]
         what = f"{hw} {r['Sensors Enabled']} {r['CRC Bytes']}"
         if hw not in HW_ORDER:
@@ -58,11 +62,11 @@ def build_rows(rows):
 
 
 def render(release, number, cells):
-    hws = ", ".join(h for h in HW_ORDER if any(c[1] == h for c in cells))
-    head = f"# Test Results {number} For Different Sensor Configurations ({hws}, {release})"
+    hws = ", ".join(h for h in HW_ORDER if any(c[DEVICE] == h for c in cells))
+    head = f"# Test Results {number} For Different Sensor Configurations ({hws})"
     lines = [marker(release), head,
-             "| " + " | ".join(COLUMNS) + " |",
-             "| " + " | ".join("---" for _ in COLUMNS) + " |"]
+             "| " + " | ".join(WIKI_COLUMNS) + " |",
+             "| " + " | ".join("---" for _ in WIKI_COLUMNS) + " |"]
     lines += ["| " + " | ".join(c) + " |" for c in cells]
     return "\n".join(lines) + "\n"
 
@@ -81,7 +85,7 @@ def apply(text, release, tables):
     rows = [[c.strip() for c in line.strip().strip("|").split("|")] for line in existing.group(0).splitlines()[4:]]
     rows += [c for c in new if c not in rows]
     order = {hw: i for i, hw in enumerate(HW_ORDER)}
-    rows.sort(key=lambda c: order.get(c[1], len(HW_ORDER)))   # stable: runs stay in the order published
+    rows.sort(key=lambda c: order.get(c[DEVICE], len(HW_ORDER)))   # stable: runs stay in the order published
     block = render(release, int(existing.group(1)), rows).rstrip("\n")
     return text[:existing.start()] + block + text[existing.end():]
 
@@ -106,7 +110,7 @@ def main():
     if not rows:
         sys.exit("CSV has no rows")
 
-    tables, problems = build_rows(rows)
+    tables, problems = build_rows(rows, a.release)
     for p in problems:
         print("WARNING:", p, file=sys.stderr)
     if not tables:
