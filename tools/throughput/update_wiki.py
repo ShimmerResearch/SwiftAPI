@@ -127,6 +127,8 @@ def main():
     ap.add_argument("--commit", action="store_true", help="commit in the wiki clone, without pushing")
     ap.add_argument("--push", action="store_true",
                     help="publish: fresh clone of the live wiki, show the change, ask, commit and push")
+    ap.add_argument("--yes", action="store_true",
+                    help="with --push: publish without asking (for a shell with no keyboard input)")
     a = ap.parse_args()
     a.csv = a.csv or a.csv_opt
     if not a.csv:
@@ -175,10 +177,17 @@ def main():
         git(wiki, "checkout", "--", PAGE)
         print("Dry run: nothing changed. Add --push to publish, or --commit to commit locally.")
         return
-    if a.push and input("Publish this to the GitHub wiki? [y/N] ").strip().lower() != "y":
-        git(wiki, "checkout", "--", PAGE)
-        print("Cancelled: nothing published.")
-        return
+    if a.push and not a.yes:
+        try:
+            answer = input("Publish this to the GitHub wiki? [y/N] ")
+        except EOFError:   # no keyboard: e.g. run through a tool rather than a terminal
+            answer = ""
+            print("\nNo answer could be read (no terminal). Run it in Terminal, or add --yes after "
+                  "checking the change above.")
+        if answer.strip().lower() != "y":
+            git(wiki, "checkout", "--", PAGE)
+            print("Cancelled: nothing published.")
+            return
     git(wiki, "add", PAGE)
     hws = ", ".join(h for h in HW_ORDER if h in tables)
     git(wiki, "commit", "-m", f"BLE throughput results for {a.release} ({hws})")

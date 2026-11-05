@@ -88,7 +88,14 @@ python3 tools/throughput/update_wiki.py ~/Downloads/throughput_<date>_<time>.csv
 python3 tools/throughput/update_wiki.py ~/Downloads/throughput_<date>_<time>.csv --push    # publish
 ```
 - `--push` clones the live wiki fresh, prints the change, asks `Publish this to the GitHub wiki? [y/N]`,
-  then commits and pushes with your GitHub login. Anything but `y` publishes nothing.
+  then commits and pushes with plain `git push`. Anything but `y` publishes nothing. Run it in
+  Terminal: where nothing can be typed (e.g. `!` in Claude Code) it cancels, and `--push --yes`
+  skips the question once the printed change has been checked.
+- Pushing needs command-line git to have a GitHub credential (GitHub Desktop's sign-in is not shared
+  with it). One-time setup: create a classic personal access token with the `public_repo` scope
+  (GitHub > Settings > Developer settings > Personal access tokens > Tokens (classic)). At the first
+  push, in Terminal, git asks for a username (your GitHub username) and a password (paste the
+  token); the macOS keychain (`credential.helper osxkeychain`) remembers it for later pushes.
 - The API release defaults to the latest `ShimmerSwiftAPI_v*` tag on GitHub (printed);
   `--release ShimmerSwiftAPI_vX.Y.Z` names another.
 - Every cell comes from the app. Equipment is the phone model from the iOS model identifier
