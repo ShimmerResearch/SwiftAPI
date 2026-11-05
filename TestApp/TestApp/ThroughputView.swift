@@ -71,7 +71,7 @@ struct ThroughputView: View {
                     }
                 } header: { Text("Run") } footer: {
                     Text(quick ? "Quick check: a smoke test, not wiki results."
-                               : "Full: 3 runs x 60 s per CRC mode, about 7 min per device.")
+                               : "Full: 1 run x 60 s per CRC mode, retried if it fails, about 3 min per device.")
                 }
 
                 Section { ForEach(Array(log.enumerated().reversed()), id: \.offset) { Text($0.element).font(.footnote) } }

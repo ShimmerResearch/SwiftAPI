@@ -17,10 +17,9 @@ against a Shimmer.**
   (`BluetoothManager.startScanning(deviceName:)`), one retry.
 - Record FW, hardware, Bluetooth radio (`0xA1` -> e.g. `RN4678 v1.23`, `IF820 v01.04.16.16`),
   expansion board, iOS and app version from the device, not from typing.
-- For each config and each of N repeats: set CRC, then rate, then sensors, stream, count, stop.
+- For each config (one run, retried if it fails): set CRC, then rate, then sensors, stream, count, stop.
 - Write the wiki table itself as CSV: the wiki's 12 columns, one row per device and CRC setting.
-  Packet Reception Rate is the median of the runs' API PRR when every run ended ok, otherwise
-  `incomplete (n/m ok: reasons)`. Per-run detail (received counts, raw PRR, retries) is only in the
+  Packet Reception Rate is the API PRR of the ok run, otherwise `failed after n tries: reasons`. Per-run detail (received counts, raw PRR, retries) is only in the
   app's log, not the CSV.
 - `tools/throughput/update_wiki.py` copies the publishable rows into new wiki tables.
 
@@ -30,8 +29,9 @@ against a Shimmer.**
 - **Packet-size gate.** Wire size must equal `1 + 3 + payload + CRC` (15 / 16 bytes for LN Accel +
   GSR + PPG, as on the wiki). A mismatch means the wrong sensors are on, and the run is rejected, not
   reported.
-- **Repeats and median.** 3 runs per config. The wiki notes a +/-8% tolerance at high throughput; one
-  run is not a result.
+- **One ok run per config.** Each setting is run once for 60 s; a failed run is retried (below) and
+  only the ok run is reported. The runner still supports `repeats` > 1, in which case the PRR is the
+  median and every run must be ok.
 - **Retries.** A run that is not `ok` is tried again up to 3 times (`maxRetries`), reconnecting
   first if the link dropped. Only the last try counts; if every try failed, the setting's PRR cell
   says `incomplete`, never a number.
@@ -58,7 +58,7 @@ the wiki's PPG channel. 6 accel + 2 GSR + 2 PPG = 10 payload bytes.
 ## Run
 Open `Shimmer.xcworkspace`, select the **TestApp** scheme and the iPhone, set a team under Signing &
 Capabilities, and Run. **Quick check** (on by default) does 10 s x 1 run per CRC mode as a smoke test;
-turn it off for the wiki matrix (3 x 60 s per CRC mode, about 7 min per device). The phone is kept
+turn it off for the wiki matrix (1 x 60 s per CRC mode, retried if it fails, about 3 min per device). The phone is kept
 awake during a run.
 
 The CSV is saved as `throughput_<date>_<time>.csv` in the app's Documents folder. Get it with **Share

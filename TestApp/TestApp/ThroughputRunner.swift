@@ -63,7 +63,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
         // 6 accel + 2 GSR + 2 PPG = 10 payload bytes (the wiki's 15 / 16 bytes = 1 start + 3 ts + 10 + CRC)
         return [Shimmer3Protocol.BTCRCMode.ONE_BYTE, Shimmer3Protocol.BTCRCMode.TWO_BYTE].map {
             ThroughputConfig(label: "LN Accel, GSR, PPG", sensorBitmap: bitmap, payloadBytes: 10,
-                             rateHz: 128, crc: $0, seconds: 60, repeats: 3)
+                             rateHz: 128, crc: $0, seconds: 60, repeats: 1)   // one ok run each; failures are retried
         }
     }
 
@@ -244,7 +244,7 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
                               "Packet Reception Rate", "OS Version", "Distance between devices (approximate)"]
 
     /// The wiki table as CSV. Each setting's runs become one row: Packet Reception Rate is the
-    /// median of the runs' API PRR when every run ended ok, otherwise "incomplete (n/m ok)" or the
+    /// API PRR of the ok run (the median if there are several), otherwise "failed after n tries" or the
     /// failure, so a setting that did not finish can never pass for a result.
     static func csv(_ rows: [ThroughputRow], distance: String) -> String {
         var order: [String] = []
@@ -266,7 +266,8 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
                 prr = "\(Int(median.rounded()))%"
             } else {
                 let reasons = Set(g.map(\.status)).subtracting(["ok"]).sorted().joined(separator: ", ")
-                prr = "incomplete (\(ok.count)/\(g.count) ok: \(reasons))"
+                prr = g.count == 1 ? "failed after \(first.attempts) tries: \(reasons)"
+                                   : "incomplete (\(ok.count)/\(g.count) ok: \(reasons))"
             }
             let bytes = (ok.first ?? first).packetBytes
             let cells = [
