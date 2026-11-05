@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Turn a ThroughputRunner CSV into new tables on the BLE-Throughput wiki page.
 
-One table per release, numbered after the last "# Test Results N" on the page and inserted above
-"# Notes", with every hardware's rows in it (Shimmer3 first). Old tables are never touched.
-Re-running for the same release replaces that hardware's rows in its table and keeps the others, so
-there are no duplicates.
+One table per test run, numbered after the last "# Test Results N" on the page and inserted above
+"# Notes", with every hardware's rows in it (Shimmer3 first) and the API release in its heading.
+Old tables are never touched, so a release tested again gets a new table and the earlier one stays.
+Publishing a run whose table is already on the page for that release changes nothing.
 
 Dry run by default: prints the diff and changes nothing. --commit commits in the local wiki clone.
 It never pushes. Push the wiki yourself after reading the diff.
@@ -68,20 +68,12 @@ def render(release, number, cells):
 
 
 def apply(text, release, tables):
-    """Replace this release's rows in its table, or add a new table above '# Notes'."""
-    existing = re.search(re.escape(marker(release)) + r"\n# Test Results (\d+).*?(?=\n\n|\n# |\Z)", text, re.S)
-    rows = {}
-    if existing:
-        # Keep the rows of hardware this CSV did not test.
-        for line in existing.group(0).splitlines()[4:]:
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) == len(COLUMNS) and cells[1] not in tables:
-                rows.setdefault(cells[1], []).append(cells)
-    rows.update(tables)
-    cells = [c for hw in HW_ORDER for c in rows.get(hw, [])]
-    if existing:
-        n = int(existing.group(1))
-        return text[:existing.start()] + render(release, n, cells).rstrip("\n") + text[existing.end():]
+    """Add this run as the next table above '# Notes', unless the same table is already there."""
+    cells = [c for hw in HW_ORDER for c in tables.get(hw, [])]
+    for block in re.finditer(re.escape(marker(release)) + r"\n# Test Results \d+.*?(?=\n\n|\n# |\Z)", text, re.S):
+        rows = [[c.strip() for c in line.strip().strip("|").split("|")] for line in block.group(0).splitlines()[4:]]
+        if rows == cells:
+            return text   # this run is already published
     numbers = [int(n) for n in re.findall(r"^# Test Results (\d+)", text, re.M)]
     block = render(release, max(numbers, default=0) + 1, cells) + "\n"
     notes = re.search(r"^# Notes", text, re.M)
@@ -127,7 +119,7 @@ def main():
     old = page.read_text(encoding="utf-8")
     new = apply(old, a.release, tables)
     if new == old:
-        print("No change: this release is already on the page with these values.")
+        print("No change: this run is already on the page for this release.")
         return
     with page.open("w", encoding="utf-8", newline="\n") as f:  # write_text(newline=) needs 3.10
         f.write(new)
