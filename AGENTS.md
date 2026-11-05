@@ -27,6 +27,26 @@ gh run view <id> --log
 and look for `** TEST SUCCEEDED **` and per-case `passed` lines. A green check alone does not prove
 execution.
 
+## Releasing
+
+`.github/workflows/release.yml` makes a Swift API release. Run it from **Actions > Release > Run
+workflow** on `main`, or:
+
+```
+gh workflow run release.yml --ref main -f version=1.1.0
+gh workflow run release.yml --ref main -f version=1.1.0 -f dry_run=true
+```
+
+It runs the test suite on the commit being released, then tags it `ShimmerSwiftAPI_v<version>` and
+creates the GitHub release with GitHub's generated notes, counted from the previous
+`ShimmerSwiftAPI_v*` tag. It refuses a version that is not `MAJOR.MINOR.PATCH`, already exists, or is
+not above the last release. A dry run stops before creating anything and shows the notes in the
+run's summary.
+
+Releases are source-only: no binary is attached, and consumers build `ShimmerBluetooth` from the
+tag. `MARKETING_VERSION` in `project.pbxproj` is not changed by a release. The gRPC server keeps its
+own `ShimmerBLEGrpc_v*` tags, which this workflow does not make.
+
 ## Adding a file needs four hand-written pbxproj entries
 
 `project.pbxproj` is `objectVersion = 56` — classic groups, not synchronized folders — so Xcode's

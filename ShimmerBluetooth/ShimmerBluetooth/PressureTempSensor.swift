@@ -62,6 +62,10 @@ public class PressureTempSensor: Sensor , SensorProcessing{
     /// nil (not yet known) keeps the BMP390 path on a Shimmer3R.
     public var pressureSensorType: PressureSensorType? = nil
 
+    /// True once a Shimmer3R's BMP390 coefficients have been parsed. Until then its
+    /// pressure and temperature are reported as not calibrated (NaN).
+    public private(set) var hasBmp390Coefficients = false
+
     /// BMP581 oversampling settings, indexed by the 3-bit pressure resolution field.
     public static let ListOfPressureResolutionBMP581 = ["Lowest Power", "Low", "Standard", "High", "High Res", "Very High Res", "Ultra High Res", "Highest Res"]
 
@@ -168,8 +172,12 @@ public class PressureTempSensor: Sensor , SensorProcessing{
                 return objectCluster
             }
 
-            let (compPress, tLin) = calibratePressure390(UP: Double(rawP),
-                                                         UT: Double(rawT))
+            // No coefficients: none received yet, an all-0x00/0xFF block, or a BMP390 assumed from
+            // the SR number. The BMP390 has no published defaults, so report the values as not
+            // calibrated rather than invent them, as the Java driver does (DEV-1125).
+            let (compPress, tLin) = hasBmp390Coefficients
+                ? calibratePressure390(UP: Double(rawP), UT: Double(rawT))
+                : (Double.nan, Double.nan)
 
             let temperatureC = tLin
             let pressurekPa  = compPress / 1000.0
@@ -249,6 +257,13 @@ public class PressureTempSensor: Sensor , SensorProcessing{
             // Drop the first 2 header bytes (length + chipId), keep next 21
                     let b = Array(pressureResoRes.dropFirst(2).prefix(21))
 
+                    // As CalibDetailsBmp390.parseCalParamByteArray: an all-0x00 or all-0xFF block
+                    // holds no coefficients, so keep none and leave the values uncalibrated
+                    guard b.count == 21, !b.allSatisfy({ $0 == 0x00 }), !b.allSatisfy({ $0 == 0xFF }) else {
+                        print("No BMP390 coefficients in the reply, pressure and temperature are not calibrated")
+                        return
+                    }
+
                     func u16(_ i: Int) -> UInt16 {
                         // ConcatenateBytes(high, low) style
                         return (UInt16(b[i+1]) << 8) | UInt16(b[i])
@@ -325,6 +340,7 @@ public class PressureTempSensor: Sensor , SensorProcessing{
                     print("par_P10 = \(par_P10)")
                     print("par_P11 = \(par_P11)")
 
+                    hasBmp390Coefficients = true
                     return
             return
         } else {
@@ -364,6 +380,13 @@ public class PressureTempSensor: Sensor , SensorProcessing{
             print("Invalid pressure calibration response: \(payload.map{ String(format: "%02X", $0) }.joined(separator: " "))")
             return false
         }
+        // A Shimmer3R carries a BMP390 or BMP581. Any other ID is refused, leaving the
+        // SR-number rule to decide, as the Java driver does.
+        if HardwareVersion == Shimmer3Protocol.HardwareType.Shimmer3R.rawValue
+            && decoded.sensorType != .BMP390 && decoded.sensorType != .BMP581 {
+            print("Pressure calibration response refused: a Shimmer3R carries a BMP390 or BMP581, not a \(decoded.sensorType)")
+            return false
+        }
         pressureSensorType = decoded.sensorType
         print("Pressure sensor: \(decoded.sensorType)")
         if decoded.sensorType == .BMP390 {
@@ -396,16 +419,24 @@ public class PressureTempSensor: Sensor , SensorProcessing{
 
     /// True for LogAndStream v1.01.006 onwards, the first firmware that can drive a BMP581.
     public static func isBmp581SupportedByFirmware(firmwareIdentifier: Int, major: Int, minor: Int, internalVersion: Int) -> Bool {
-        if firmwareIdentifier != PressureTempSensor.FW_ID_LOGANDSTREAM {
-            return false
-        }
-        if major != 1 {
-            return major > 1
-        }
-        if minor != 1 {
-            return minor > 1
-        }
-        return internalVersion >= 6
+        return isLogAndStreamAtLeast(firmwareIdentifier: firmwareIdentifier, major: major, minor: minor, internalVersion: internalVersion, atLeast: (1, 1, 6))
+    }
+
+    /// Whether to ask a Shimmer3R for its pressure sensor with 0xA7, as the Java driver's
+    /// ShimmerBluetooth.readPressureCalibrationCoefficients() decides. LogAndStream v1.01.007
+    /// onwards answers with the sensor ID ([A6][01][03] on a BMP581). v1.01.006 is the one
+    /// version that NACKs it on a BMP581, so it is not asked there and the SR-number rule
+    /// stands. isBmp581PerSrNumber includes the >= v1.01.006 guard, so "BMP581 by SR number
+    /// and below v1.01.007" is exactly v1.01.006.
+    public static func readsPressureCalibrationCoefficients(isBmp581PerSrNumber: Bool, firmwareIdentifier: Int, major: Int, minor: Int, internalVersion: Int) -> Bool {
+        return !isBmp581PerSrNumber
+            || isLogAndStreamAtLeast(firmwareIdentifier: firmwareIdentifier, major: major, minor: minor, internalVersion: internalVersion, atLeast: (1, 1, 7))
+    }
+
+    /// True for LogAndStream firmware at or above the given version.
+    static func isLogAndStreamAtLeast(firmwareIdentifier: Int, major: Int, minor: Int, internalVersion: Int, atLeast version: (Int, Int, Int)) -> Bool {
+        return firmwareIdentifier == PressureTempSensor.FW_ID_LOGANDSTREAM
+            && (major, minor, internalVersion) >= version
     }
 
     /// BMP581 conversion: pressure is unsigned, Pa = raw / 64; temperature is signed, degC = raw / 65536.
