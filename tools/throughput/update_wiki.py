@@ -3,8 +3,9 @@
 
 One table per API release, numbered after the last "# Test Results N" on the page and inserted above
 "# Notes". Each row notes the API release in an "API Release" column after Equipment. A later run for the same release adds its rows to that
-release's table (grouped by hardware, Shimmer3 first); rows already in it are not repeated, and no
-row is ever removed. Other tables are never touched.
+release's table (grouped by hardware, Shimmer3 first). A re-run of the same setting on the same
+phone and firmware replaces that row in place; anything else is added. Other tables are never
+touched.
 
 Dry run by default: prints the change and touches nothing. To publish in one step:
 
@@ -39,6 +40,9 @@ COLUMNS = ["Equipment", "Shimmer Device", "FW Version", "Radio Type", "Sensors E
 # from --release.
 WIKI_COLUMNS = COLUMNS[:1] + ["API Release"] + COLUMNS[1:]
 DEVICE = WIKI_COLUMNS.index("Shimmer Device")
+# Cells that identify a setting within a release's table: a newer result for these replaces the row.
+SETTING = [WIKI_COLUMNS.index(c) for c in ["Equipment", "Shimmer Device", "FW Version", "Sensors Enabled",
+                                           "CRC Bytes", "Sampling Rate", "Streaming Duration"]]
 
 
 def marker(release: str) -> str:
@@ -88,7 +92,14 @@ def apply(text, release, tables):
             return text[:notes.start()] + block + text[notes.start():]
         return text.rstrip("\n") + "\n\n" + block
     rows = [[c.strip() for c in line.strip().strip("|").split("|")] for line in existing.group(0).splitlines()[4:]]
-    rows += [c for c in new if c not in rows]
+    # A re-run of the same setting on the same phone and firmware replaces that row in place, so a
+    # setting never shows two results. Anything else (another phone, firmware or setting) is added.
+    for c in new:
+        same = next((i for i, r in enumerate(rows) if [r[k] for k in SETTING] == [c[k] for k in SETTING]), None)
+        if same is None:
+            rows.append(c)
+        else:
+            rows[same] = c
     order = {hw: i for i, hw in enumerate(HW_ORDER)}
     rows.sort(key=lambda c: order.get(c[DEVICE], len(HW_ORDER)))   # stable: runs stay in the order published
     block = render(release, int(existing.group(1)), rows).rstrip("\n")

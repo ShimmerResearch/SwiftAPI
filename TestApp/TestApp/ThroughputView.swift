@@ -79,6 +79,9 @@ struct ThroughputView: View {
             }
             .navigationTitle("Throughput")
         }
+        // Swiping the sheet away mid-run would leave the run going unseen, the phone kept awake,
+        // and a second Run able to start against the same devices.
+        .interactiveDismissDisabled(running)
     }
 
     private func scan() async {
