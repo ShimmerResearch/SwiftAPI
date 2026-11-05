@@ -8,11 +8,11 @@ duplicates.
 Dry run by default: prints the diff and changes nothing. --commit commits in the local wiki clone.
 It never pushes. Push the wiki yourself after reading the diff.
 
-    python update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --phone "iPhone 12" \
-        --wiki ./SwiftAPI.wiki
+    python update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --wiki ./SwiftAPI.wiki
 
-The radio cell comes from the CSV's radio column (read from the device); --radio HW=VERSION
-overrides it, and is needed for CSVs written before that column existed.
+The Equipment cell comes from the CSV's phone column (read by the app) and the radio cell from its
+radio column (read from the device). --phone and --radio HW=VERSION override them, and are needed
+for CSVs written before those columns existed.
 """
 import argparse
 import csv
@@ -124,7 +124,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", required=True, type=Path)
     ap.add_argument("--release", required=True, help="e.g. ShimmerSwiftAPI_v1.1.0")
-    ap.add_argument("--phone", required=True, help='Equipment cell, e.g. "iPhone 12"')
+    ap.add_argument("--phone", help='Equipment cell, e.g. "iPhone 12". Overrides the CSV phone column')
     ap.add_argument("--radio", action="append", default=[], metavar="HW=VERSION",
                     help='e.g. Shimmer3="RN4678 v1.23" (repeat per hardware). Overrides the CSV radio column; '
                          'only needed for CSVs without one')
@@ -139,6 +139,13 @@ def main():
         rows = list(csv.DictReader(f))
     if not rows:
         sys.exit("CSV has no rows")
+    phones = {r.get("phone", "") for r in rows} - {""}   # older CSVs have no phone column
+    if not a.phone:
+        if len(phones) != 1:
+            sys.exit(f"CSV names {sorted(phones) or 'no'} phone(s); pass --phone")
+        a.phone = phones.pop()
+        if "," in a.phone:   # a raw identifier such as iPhone18,3: the app's name table is out of date
+            print(f"WARNING: phone is the raw model identifier {a.phone!r}; pass --phone to name it", file=sys.stderr)
 
     tables, problems = build_rows(rows, a.release, a.phone, radios, a.distance, a.min_runs)
     for p in problems:

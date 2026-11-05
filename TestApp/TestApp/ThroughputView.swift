@@ -104,7 +104,7 @@ struct ThroughputView: View {
         }
         let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let rows = await runner.run(deviceNames: selected.sorted(), matrix: matrix,
-                                    appVersion: app, ios: osVersion())
+                                    appVersion: app, ios: osVersion(), phone: Self.phoneModel())
         csvURL = save(ThroughputRunner.csv(rows))
         log.append(csvURL.map { "Saved \($0.lastPathComponent)" } ?? "Could not save the CSV")
 
@@ -135,6 +135,43 @@ struct ThroughputView: View {
         return "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
         #endif
     }
+
+    /// The wiki's Equipment cell, e.g. "iPhone X". A model not in the table below is written as its
+    /// raw identifier (e.g. "iPhone18,3"), which is still exact: add it to the table when seen.
+    static func phoneModel() -> String {
+        let id = modelIdentifier()
+        return phoneNames[id] ?? id
+    }
+
+    private static func modelIdentifier() -> String {
+        if let sim = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return sim }
+        #if os(iOS)
+        var sys = utsname()
+        uname(&sys)
+        return withUnsafeBytes(of: &sys.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        #else
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        return String(cString: model)   // e.g. "Mac14,3"
+        #endif
+    }
+
+    private static let phoneNames: [String: String] = [
+        "iPhone10,1": "iPhone 8", "iPhone10,4": "iPhone 8", "iPhone10,2": "iPhone 8 Plus", "iPhone10,5": "iPhone 8 Plus",
+        "iPhone10,3": "iPhone X", "iPhone10,6": "iPhone X",
+        "iPhone11,2": "iPhone XS", "iPhone11,4": "iPhone XS Max", "iPhone11,6": "iPhone XS Max", "iPhone11,8": "iPhone XR",
+        "iPhone12,1": "iPhone 11", "iPhone12,3": "iPhone 11 Pro", "iPhone12,5": "iPhone 11 Pro Max",
+        "iPhone12,8": "iPhone SE (2nd gen)",
+        "iPhone13,1": "iPhone 12 mini", "iPhone13,2": "iPhone 12", "iPhone13,3": "iPhone 12 Pro", "iPhone13,4": "iPhone 12 Pro Max",
+        "iPhone14,4": "iPhone 13 mini", "iPhone14,5": "iPhone 13", "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max",
+        "iPhone14,6": "iPhone SE (3rd gen)", "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
+        "iPhone15,2": "iPhone 14 Pro", "iPhone15,3": "iPhone 14 Pro Max",
+        "iPhone15,4": "iPhone 15", "iPhone15,5": "iPhone 15 Plus", "iPhone16,1": "iPhone 15 Pro", "iPhone16,2": "iPhone 15 Pro Max",
+        "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus", "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max",
+        "iPhone17,5": "iPhone 16e",
+    ]
 
     private func setIdleTimerDisabled(_ disabled: Bool) {
         #if os(iOS)

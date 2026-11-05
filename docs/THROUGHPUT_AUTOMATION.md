@@ -69,8 +69,12 @@ Python 3, stdlib only, runs on the Mac. Adds one table per hardware per release,
 marker comment per table makes a re-run replace that table instead of duplicating it.
 
 ```
-python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0 --phone "iPhone 12"
+python tools/throughput/update_wiki.py --csv results.csv --release ShimmerSwiftAPI_v1.1.0
 ```
+- The Equipment cell comes from the CSV's `phone` column, which the app fills from the iOS model
+  identifier (e.g. `iPhone10,3` -> "iPhone X"). A model missing from the app's table is written as
+  the raw identifier and the script warns; `--phone "iPhone 12"` overrides it, and is needed for CSVs
+  written before that column existed.
 - The Radio Type cell comes from the CSV's `radio` column. `--radio Shimmer3="RN4678 v1.23"` overrides
   it, and is needed for CSVs written before that column existed.
 - Dry run by default: prints the diff, changes nothing. `--commit` commits in the local wiki clone.

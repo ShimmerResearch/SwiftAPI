@@ -23,7 +23,7 @@ struct ThroughputConfig {
 }
 
 struct ThroughputRow {
-    var device = "", fw = "", hw = "", radio = "", expBoard = "", ios = "", app = ""
+    var device = "", fw = "", hw = "", radio = "", expBoard = "", ios = "", app = "", phone = ""
     var config = "", crc = 0, rateHz = 0.0, seconds = 0, run = 0
     var attempts = 0             // 1 if the first try was ok; up to 1 + maxRetries
     var packetBytes = 0, expectedPacketBytes = 0
@@ -117,17 +117,17 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
     // MARK: run
     /// Runs the matrix on each device in turn. A device that fails to connect gives one
     /// connect-failed row and the run moves on to the next.
-    func run(deviceNames: [String], matrix: [ThroughputConfig], appVersion: String, ios: String) async -> [ThroughputRow] {
+    func run(deviceNames: [String], matrix: [ThroughputConfig], appVersion: String, ios: String, phone: String) async -> [ThroughputRow] {
         var rows: [ThroughputRow] = []
         for name in deviceNames {
-            rows += await run(deviceName: name, matrix: matrix, appVersion: appVersion, ios: ios)
+            rows += await run(deviceName: name, matrix: matrix, appVersion: appVersion, ios: ios, phone: phone)
         }
         return rows
     }
 
-    func run(deviceName: String, matrix: [ThroughputConfig], appVersion: String, ios: String) async -> [ThroughputRow] {
+    func run(deviceName: String, matrix: [ThroughputConfig], appVersion: String, ios: String, phone: String) async -> [ThroughputRow] {
         var rows: [ThroughputRow] = []
-        var base = ThroughputRow(); base.device = deviceName; base.ios = ios; base.app = appVersion
+        var base = ThroughputRow(); base.device = deviceName; base.ios = ios; base.app = appVersion; base.phone = phone
         var connected = false
         onProgress?("\(deviceName): connecting")
         for attempt in 0..<2 where !connected {   // one retry
@@ -239,9 +239,9 @@ final class ThroughputRunner: NSObject, ShimmerProtocolDelegate, BluetoothManage
 
     // MARK: output
     static func csv(_ rows: [ThroughputRow]) -> String {
-        let head = "device,hw,fw,radio,exp_board,app,ios,config,crc,rate_hz,seconds,run,attempts,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
+        let head = "device,hw,fw,radio,exp_board,app,phone,ios,config,crc,rate_hz,seconds,run,attempts,packet_bytes,expected_packet_bytes,received,expected,prr_api,prr_raw,wall_s,status"
         let lines = rows.map { r in
-            [r.device, r.hw, r.fw, "\"\(r.radio)\"", r.expBoard, r.app, r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
+            [r.device, r.hw, r.fw, "\"\(r.radio)\"", r.expBoard, r.app, "\"\(r.phone)\"", r.ios, "\"\(r.config)\"", "\(r.crc)", "\(r.rateHz)", "\(r.seconds)", "\(r.run)", "\(r.attempts)",
              "\(r.packetBytes)", "\(r.expectedPacketBytes)", "\(r.received)", "\(r.expected)",
              String(format: "%.1f", r.prrApi), String(format: "%.1f", r.prrRaw), String(format: "%.1f", r.wallSeconds), r.status].joined(separator: ",")
         }
