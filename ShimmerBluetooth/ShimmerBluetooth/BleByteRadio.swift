@@ -60,7 +60,11 @@ public class BleByteRadio : NSObject, ByteCommunication {
 
     
     public func connect() async -> Bool? {
-        await self.bluetoothManager!.connect(activePeripheral: activePeripheral!)
+        // A connect CoreBluetooth failed or gave up on never reaches service discovery: return now
+        // instead of waiting for characteristics that will not come.
+        guard await self.bluetoothManager!.connect(activePeripheral: activePeripheral!) == true else {
+            return false
+        }
         
         /*
         if self.centralManager.state != .poweredOn {

@@ -26,7 +26,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     }
 
     var startTime = Date()
-    var numberOfPackets = 0
+    /// Packets received since streaming started; the numerator of the trial PRR.
+    public private(set) var numberOfPackets = 0
     public var REV_HW_MAJOR: Int = -1
     
     public var REV_HW_MINOR: Int = -1
@@ -44,6 +45,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     public var EXPANSION_BOARD_REV: Int = -1
     
     public var EXPANSION_BOARD_REV_SPECIAL: Int = -1
+    /// The Bluetooth radio's own version string, as sendReadBtFwVersionCommand() read it, e.g.
+    /// "RN4678 V1.23 06/30/2021 (c)Microchip Technology Inc" or "CYW20820 app=v01.04.16.16".
+    /// Empty until read. ShimmerUtilities.btModuleDisplayName gives the short form.
+    public private(set) var btModuleVersion: String = ""
     public var internalExpPower:Int = -1
     public var lnAccelSensor: LNAccelSensor = LNAccelSensor(hwid: HardwareType.UNKNOWN.rawValue)
     public var wrAccelSensor: WRAccelSensor = WRAccelSensor(hwid: HardwareType.UNKNOWN.rawValue)
@@ -683,10 +688,14 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     
     // Start the processing loop
     func startProcessing() {
-        self.receivedBytes.removeAll()
+        queue.sync(flags: .barrier) { self.receivedBytes.removeAll() }
         self.processing = true
         processingQueue.async {
             while self.processing {
+                // Each pass holds `queue` exclusively, as processData's append does, so the buffer
+                // is never read here while it is being appended to on the Bluetooth thread.
+                // Unsynchronized, the two corrupted the array (SIGABRT mid-stream).
+                self.queue.sync(flags: .barrier) {
                 if (self.processStatusPushAtHead()){
                     /* An unsolicited status push, consumed if it has all arrived and otherwise
                      * held until it has. It is neither a reply nor a data packet, so neither
@@ -734,7 +743,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         if (self.commandSent==PacketTypeShimmer.getCalibDumpCommand){
                             if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.calibDumpResponse.rawValue)
                             {
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next. A sleep
+                                // here would hold `queue`, so the rest could never arrive.
+                                guard self.receivedBytes.count >= 3,
+                                      self.receivedBytes.count >= Int(self.receivedBytes[2]) + 3 + 2 + Int(self.CRCMode.rawValue) else { return }
                                 var received = self.receivedBytes
                                 print("\(received.count) data: \(received)")
                                 let length = received[2]
@@ -768,7 +780,9 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         if (self.commandSent==PacketTypeShimmer.getInfoMem){
                             if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.getInfoMemResponse.rawValue)
                             {
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= 3,
+                                      self.receivedBytes.count >= Int(self.receivedBytes[2]) + 3 + Int(self.CRCMode.rawValue) else { return }
                                 //print(self.receivedBytes)
                                 var received = self.receivedBytes
                                 //print(received)
@@ -799,6 +813,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }
                         if (self.commandSent==PacketTypeShimmer.setCRCCommand){
 
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1+Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
                             var crcresult = true
@@ -817,6 +833,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                             }
                             print("Command ACK Received and Processed: \(self.commandSent!)")
                         } else if(self.commandSent == PacketTypeShimmer.setInfoMem){
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1+Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
                             var crcresult = true
@@ -882,9 +900,11 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                
                             }
                         } else if (self.commandSent==PacketTypeShimmer.getShimmerVersionCommand){
-                            if (self.receivedBytes[1] == PacketTypeShimmer.getShimmerVersionResponse.rawValue)
+                            if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.getShimmerVersionResponse.rawValue)
                             {
                                 var length = 1 + 1 + 1 + Int(self.CRCMode.rawValue)//ack + response byte + 1
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= length else { return }
                                 var received = Array(self.receivedBytes.prefix(length))
                                 self.receivedBytes.removeFirst(length)
                                 var crcresult = true
@@ -910,11 +930,14 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                 
                             }
                         } else if (self.commandSent==PacketTypeShimmer.getDaughterCardIDCommand){
-                            if (self.receivedBytes[1] == PacketTypeShimmer.daughterCardIDResponse.rawValue)
+                            if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.daughterCardIDResponse.rawValue)
                             {
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count > 2 else { return }
                                 var len = Int(self.receivedBytes[2]);
                                 
                                 var length = 1 + 1 + 1 + len + Int(self.CRCMode.rawValue)//ack + response byte + 1 (length)
+                                guard self.receivedBytes.count >= length else { return }
                                 var received = Array(self.receivedBytes.prefix(length))
                                 self.receivedBytes.removeFirst(length)
                                 var crcresult = true
@@ -944,9 +967,11 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                 
                             }
                         } else if (self.commandSent==PacketTypeShimmer.getFWVersionCommand){
-                            if (self.receivedBytes[1] == PacketTypeShimmer.fwVersionResponse.rawValue)
+                            if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.fwVersionResponse.rawValue)
                             {
                                 var length = 1 + 1 + 6 + Int(self.CRCMode.rawValue)//ack + response byte + 1
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= length else { return }
                                 var received = Array(self.receivedBytes.prefix(length))
                                 self.receivedBytes.removeFirst(length)
                                 var crcresult = true
@@ -978,6 +1003,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }else if (self.commandSent==PacketTypeShimmer.startStreamingCommand){
                                 print("Start Streaming ACK Received")
                                 
+                                // The ACK's CRC can arrive in a later notification: wait for it.
+                                guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                                 let received = Array(self.receivedBytes.prefix(1+Int(self.CRCMode.rawValue)))
                                 self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
                                 print(received)
@@ -997,10 +1024,11 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                 }
                             }
                         else if (self.commandSent==PacketTypeShimmer.getBmp280CalibrationCoefficientsCommand){
-                            if (self.receivedBytes[1] == PacketTypeShimmer.bmp280CalibrationCoefficientsResponse.rawValue)
+                            if (self.receivedBytes.count > 1 && self.receivedBytes[1] == PacketTypeShimmer.bmp280CalibrationCoefficientsResponse.rawValue)
                             {
                                 print("Get Bmp280 Calib Coefficient ACK Received")
-                                Thread.sleep(forTimeInterval: 0.5)
+                                // Not all here yet: end this pass and look again on the next (see calib dump).
+                                guard self.receivedBytes.count >= 1 + 1 + 24 + Int(self.CRCMode.rawValue) else { return }
                                 
                                 
                                 var length = 1 + 1 + 24 //ack + response byte + 24
@@ -1032,6 +1060,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }else if (self.commandSent==PacketTypeShimmer.setSamplingRateCommand){
                             
                             print("Set Sampling Rate Command ACK Received")
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1+Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
                             var crcresult = true
@@ -1056,6 +1086,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }else if (self.commandSent==PacketTypeShimmer.setExgRegsCommand){
                             
                             print("Set Exg Regs Command ACK Received")
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1+Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1+Int(self.CRCMode.rawValue))
                             var crcresult = true
@@ -1100,9 +1132,34 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                 }
                             }
                         }
+                        else if (self.commandSent == PacketTypeShimmer.getBtFwVersionStrCommand) {
+                            if self.receivedBytes.count > 2 && self.receivedBytes[1] == PacketTypeShimmer.btFwVersionStrResponse.rawValue {
+                                // [ACK][0xA2][len][len bytes of version text][CRC]. Longer than one BLE
+                                // notification, so wait for all of it.
+                                let length = 1 + 1 + 1 + Int(self.receivedBytes[2]) + Int(self.CRCMode.rawValue)
+                                if self.receivedBytes.count >= length {
+                                    let received = Array(self.receivedBytes.prefix(length))
+                                    self.receivedBytes.removeFirst(length)
+                                    var crcresult = true
+                                    if self.CRCMode != BTCRCMode.OFF {
+                                        crcresult = self.checkCrc(received, received.count - Int(self.CRCMode.rawValue))
+                                    }
+                                    if crcresult {
+                                        self.btModuleVersion = String(decoding: received[3..<(length - Int(self.CRCMode.rawValue))], as: UTF8.self)
+                                        print("BT module version: \(self.btModuleVersion)")
+                                    } else {
+                                        print("[CRC ERROR] : \(self.commandSent!)")
+                                    }
+                                    self.continuation?.resume(returning: crcresult)
+                                    self.continuation = nil
+                                }
+                            }
+                        }
                         else if (self.commandSent == PacketTypeShimmer.setSensorsCommand) {
                             print("Set Sensors Command ACK Received")
 
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1 + Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1 + Int(self.CRCMode.rawValue))
 
@@ -1127,6 +1184,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         else if (self.commandSent == PacketTypeShimmer.setInternalEXPPowerEnableCommand) {
                             print("Set EXP Power ACK Received")
 
+                            // The ACK's CRC can arrive in a later notification: wait for it.
+                            guard self.receivedBytes.count >= 1+Int(self.CRCMode.rawValue) else { return }
                             let received = Array(self.receivedBytes.prefix(1 + Int(self.CRCMode.rawValue)))
                             self.receivedBytes.removeFirst(1 + Int(self.CRCMode.rawValue))
 
@@ -1150,9 +1209,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                         }
                     }
                 }
-                
-                    
-                    
+                }
+
+
+
                     /*
                     self.queue.sync {
                         if self.receivedBytes.count>0{
@@ -1671,6 +1731,12 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         return true
     }
     
+    /// The sampling rate (Hz) the PRR expectation is calculated from.
+    public var currentSamplingRate: Double { return CurrentSamplingRate }
+    /// Streaming packet length in bytes on the wire: start byte, payload and CRC.
+    /// Zero until sensors have been initialised.
+    public var packetSizeBytes: Int { return PacketSize + 1 }
+
     private func sendCRCCommand(crcMode:BTCRCMode) async ->Bool?{
         // Refused rather than sent when this firmware cannot carry it (strongestSafeCRCMode).
         let strongestSafe = strongestSafeCRCModeForDevice()
@@ -1802,6 +1868,21 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
     }
     
+    /// Reads the Bluetooth radio's version string into btModuleVersion (0xA1, reply 0xA2).
+    /// Supported from Shimmer3 LogAndStream v0.13.7 and on every Shimmer3R; older firmware NACKs.
+    public func sendReadBtFwVersionCommand() async -> Bool?{
+        let bytes: [UInt8] = [PacketTypeShimmer.getBtFwVersionStrCommand.rawValue]
+        guard self.continuation == nil, let radio = radio else {
+            print("Cannot send command: another command is already awaiting an ACK")
+            return false
+        }
+        commandSent = PacketTypeShimmer.getBtFwVersionStrCommand
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation   // stored before the write so a fast reply finds it
+            radio.writeBytes(bytes: bytes)
+        }
+    }
+
     private func sendPressureCalibCoefficientsCommand() async -> Bool?{
         let bytes: [UInt8] = [PacketTypeShimmer.getpressureCalibrationCoefficientsCommand.rawValue]
         commandSent = PacketTypeShimmer.getpressureCalibrationCoefficientsCommand
@@ -2324,6 +2405,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case bmp280CalibrationCoefficientsResponse = 0x9F
         case getpressureCalibrationCoefficientsCommand = 0xA7
         case pressureCalibrationCoefficientsResponse = 0xA6
+        case getBtFwVersionStrCommand = 0xA1
+        case btFwVersionStrResponse = 0xA2
         case setExgRegsCommand = 0x61
         case exgRegsResponse = 0x62
         case getExgRegsCommand = 0x63

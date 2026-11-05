@@ -214,6 +214,27 @@ public class ShimmerUtilities{
         return crcCalcArray
     }
 
+    /// The short radio name the BLE-Throughput wiki uses, from the Bluetooth module's version
+    /// string (Shimmer3Protocol.btModuleVersion). An unrecognised string is returned trimmed.
+    ///   "RN4678 V1.23 06/30/2021 (c)Microchip Technology Inc" -> "RN4678 v1.23"
+    ///   "CYW20820 app=v01.04.16.16"                           -> "IF820 v01.04.16.16"
+    /// The IF820 module is built on the CYW20820. Java's BluetoothModuleVersionDetails maps the
+    /// same strings by table, with two slips (V1.22 -> "v1.23", V1.13.5 -> "v1.15.5"); this
+    /// takes the version from the string itself.
+    public static func btModuleDisplayName(_ version: String) -> String {
+        let s = version.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        let words = s.split(separator: " ")
+        // Only the version's digits and dots: the IF820 follows it with a comma.
+        func versionDigits(_ w: Substring) -> Substring { w.prefix(while: { $0.isNumber || $0 == "." }) }
+        if words.count >= 2, words[0] == "RN4678", words[1].hasPrefix("V") {
+            return "RN4678 v\(versionDigits(words[1].dropFirst()))"
+        }
+        if words.count >= 2, words[0] == "CYW20820", words[1].hasPrefix("app=v") {
+            return "IF820 v\(versionDigits(words[1].dropFirst("app=v".count)))"
+        }
+        return s
+    }
+
     static func shimmerUartCrcByte(_ crc: Int, _ b: UInt8) -> Int {
         var crcValue = crc & 0xFFFF
         crcValue = (crcValue >> 8) | (crcValue << 8)

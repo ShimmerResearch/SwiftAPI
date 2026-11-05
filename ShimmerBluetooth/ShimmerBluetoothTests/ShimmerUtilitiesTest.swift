@@ -289,4 +289,18 @@ class ShimmerUtilitiesTest: XCTestCase {
         XCTAssertEqual(ShimmerUtilities.shimmerUartCrcCalc([0xFF, 0x8A, 0x71, 0x52, 0xAA], 4), [0x00, 0xE6], "only the first len bytes count")
     }
 
+    func testBtModuleDisplayName() {
+        // Full strings from the Java API's BluetoothModuleVersionDetails
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("RN4678 V1.23 06/30/2021 (c)Microchip Technology Inc"), "RN4678 v1.23")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("RN4678 V1.22 12/08/2020 (c)Microchip Technology Inc   "), "RN4678 v1.22")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("RN4678 V1.00.5 11/15/2016 (c)Microchip Technology Inc"), "RN4678 v1.00.5")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("CYW20820 app=v01.04.16.16"), "IF820 v01.04.16.16")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("CYW20820 app=v01.04.18.18\r\n"), "IF820 v01.04.18.18", "trailing CR LF")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("CYW20820 app=v01.04.16.16, stack=v2.0"), "IF820 v01.04.16.16",
+                       "a comma after the version, as a Shimmer3R v1.01.025 sends; kept, it split the CSV field")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("RN4678 V1.23, 06/30/2021"), "RN4678 v1.23")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName("Ver 6.15 04/26/2013\r\n(c) Roving Networks"), "Ver 6.15 04/26/2013\r\n(c) Roving Networks", "unknown: kept")
+        XCTAssertEqual(ShimmerUtilities.btModuleDisplayName(""), "")
+    }
+
 }
