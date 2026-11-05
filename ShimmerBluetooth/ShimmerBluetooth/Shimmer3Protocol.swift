@@ -361,13 +361,16 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 if (REV_HW_MAJOR==HardwareType.Shimmer3.rawValue){
                     await sendBMP280PressureCalibCoefficientsCommand()
                 } else if (REV_HW_MAJOR==HardwareType.Shimmer3R.rawValue){
-                    let pressureSensorIdReceived = await sendPressureCalibCoefficientsCommand() ?? false
+                    // As the Java driver: v1.01.006 is the one firmware that NACKs 0xA7 on a
+                    // BMP581, so it is not asked there.
+                    var pressureSensorIdReceived = false
+                    if (readsPressureCalibrationCoefficients()){
+                        pressureSensorIdReceived = await sendPressureCalibCoefficientsCommand() ?? false
+                    }
                     if (!pressureSensorIdReceived){
-                        // No usable 0xA6 reply: v1.01.006 refuses 0xA7 on a BMP581, so
-                        // fall back to the board SR number and firmware version.
-                        // Also taken for a malformed reply. A NACK only reaches here once
-                        // NACK handling resumes the command with a failure; until then it
-                        // leaves this await suspended.
+                        // No usable 0xA6 reply: not asked (v1.01.006 with a BMP581), refused
+                        // with a NACK, or malformed or refused by applyPressureCalibrationResponse.
+                        // Fall back to the board SR number and firmware version.
                         let sensorType = isShimmer3RwithBmp581() ? PressureTempSensor.PressureSensorType.BMP581 : PressureTempSensor.PressureSensorType.BMP390
                         pressureTempSensor.pressureSensorType = sensorType
                         print("Pressure sensor from SR number: \(sensorType)")
@@ -395,6 +398,16 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                                                               major: REV_FW_MAJOR,
                                                               minor: REV_FW_MINOR,
                                                               internalVersion: REV_FW_INTERNAL)
+    }
+
+    /// Whether connect() asks a Shimmer3R for its pressure sensor with 0xA7
+    /// (see PressureTempSensor.readsPressureCalibrationCoefficients).
+    public func readsPressureCalibrationCoefficients() -> Bool {
+        return PressureTempSensor.readsPressureCalibrationCoefficients(isBmp581PerSrNumber: isShimmer3RwithBmp581(),
+                                                                       firmwareIdentifier: REV_FW_IDENTIFIER,
+                                                                       major: REV_FW_MAJOR,
+                                                                       minor: REV_FW_MINOR,
+                                                                       internalVersion: REV_FW_INTERNAL)
     }
 
     func parseCalibrationDump(_ bytes:[UInt8]){
