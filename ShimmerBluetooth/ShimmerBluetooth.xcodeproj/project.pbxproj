@@ -47,6 +47,7 @@
 		9299E5102B850571001EEFE0 /* BattVoltageSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9299E50F2B850571001EEFE0 /* BattVoltageSensor.swift */; };
 		92B1067A2B7DAFBC00AB9952 /* EXGSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B106792B7DAFBC00AB9952 /* EXGSensor.swift */; };
 		92B4B5502DF035C100225A97 /* HighGAccelSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B4B54F2DF035C100225A97 /* HighGAccelSensor.swift */; };
+		DE14130B2C0100000000001B /* SoundLevelSensor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE14130A2C0100000000001A /* SoundLevelSensor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +102,7 @@
 		9299E50F2B850571001EEFE0 /* BattVoltageSensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattVoltageSensor.swift; sourceTree = "<group>"; };
 		92B106792B7DAFBC00AB9952 /* EXGSensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EXGSensor.swift; sourceTree = "<group>"; };
 		92B4B54F2DF035C100225A97 /* HighGAccelSensor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HighGAccelSensor.swift; sourceTree = "<group>"; };
+		DE14130A2C0100000000001A /* SoundLevelSensor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundLevelSensor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +148,7 @@
 			isa = PBXGroup;
 			children = (
 				92B4B54F2DF035C100225A97 /* HighGAccelSensor.swift */,
+				DE14130A2C0100000000001A /* SoundLevelSensor.swift */,
 				451EC8192DACCFF900D8F269 /* ConcurrentQueue.swift */,
 				92150EF42DE461CE00FEA53B /* AltMagSensor.swift */,
 				3AEB12F82BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift */,
@@ -340,6 +343,7 @@
 				3A7A7F282AE77F0E001FD6BD /* Shimmer3Protocol.swift in Sources */,
 				DE11460B2C0100000000001B /* Shimmer3DeviceStatus.swift in Sources */,
 				92B4B5502DF035C100225A97 /* HighGAccelSensor.swift in Sources */,
+				DE14130B2C0100000000001B /* SoundLevelSensor.swift in Sources */,
 				3AEB12F92BCE6F7E00B5F6F1 /* Shimmer3SpeedTestProtocol.swift in Sources */,
 				3AA359132AF34D89008AD334 /* Shimmer3InfoMem.swift in Sources */,
 				3A0B4B632B0DDD4500786295 /* ADCSensor.swift in Sources */,

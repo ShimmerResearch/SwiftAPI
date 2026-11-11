@@ -609,4 +609,87 @@ class SensorTest: XCTestCase {
         sensor.packetIndexHighGAccelZ = 4
         return sensor.processData(sensorPacket: packet, objectCluster: ObjectCluster(deviceName: "test"))
     }
+
+    // MARK: Sound level (Shimmer3R channel 0x38)
+
+    private func soundLevel(_ objectCluster: ObjectCluster, calibrated: Bool) -> Double? {
+        let name = calibrated
+            ? [SoundLevelSensor.SOUND_LEVEL, Sensor.SensorFormats.Calibrated.rawValue, Sensor.SensorUnits.decibelsA.rawValue].joined(separator: "_")
+            : [SoundLevelSensor.SOUND_LEVEL, Sensor.SensorFormats.Raw.rawValue, Sensor.SensorUnits.noUnit.rawValue].joined(separator: "_")
+        guard let i = objectCluster.SignalNames.firstIndex(of: name) else { return nil }
+        return objectCluster.SignalData[i]
+    }
+
+    private func soundLevelCluster(packet: [UInt8], packetIndex: Int, calibrationEnabled: Bool = true) -> ObjectCluster {
+        let sensor = SoundLevelSensor()
+        sensor.calibrationEnabled = calibrationEnabled
+        sensor.packetIndex = packetIndex
+        return sensor.processData(sensorPacket: packet, objectCluster: ObjectCluster(deviceName: "test"))
+    }
+
+    private func bytes(_ hex: String) -> [UInt8] {
+        var out: [UInt8] = []
+        var i = hex.startIndex
+        while i < hex.endIndex {
+            let j = hex.index(i, offsetBy: 2)
+            out.append(UInt8(hex[i..<j], radix: 16)!)
+            i = j
+        }
+        return out
+    }
+
+    func testSoundLevelCalibration() {
+        XCTAssertEqual(SoundLevelSensor.calibrate(raw: 4941), 49.41, accuracy: 1e-12)
+        XCTAssertEqual(SoundLevelSensor.calibrate(raw: 0), 0.0)
+        XCTAssertEqual(SoundLevelSensor.calibrate(raw: -1), -0.01, accuracy: 1e-12)
+        XCTAssertEqual(SoundLevelSensor.calibrate(raw: 32767), 327.67, accuracy: 1e-12)
+        XCTAssertTrue(SoundLevelSensor.calibrate(raw: SoundLevelSensor.NO_LEVEL).isNaN, "-32768 is no level, not -327.68 dB")
+    }
+
+    /// The level is a signed little-endian int16 at its packet index.
+    func testSoundLevelDecodesAtItsIndex() {
+        // Timestamp, then 0x134D (4941), then 0x8000 (no level)
+        let packet: [UInt8] = [0x25, 0x13, 0xF4, 0x4D, 0x13, 0x00, 0x80]
+        let level = soundLevelCluster(packet: packet, packetIndex: 3)
+        XCTAssertEqual(soundLevel(level, calibrated: false), 4941)
+        XCTAssertEqual(soundLevel(level, calibrated: true)!, 49.41, accuracy: 1e-12)
+
+        let noLevel = soundLevelCluster(packet: packet, packetIndex: 5)
+        XCTAssertEqual(soundLevel(noLevel, calibrated: false), -32768)
+        XCTAssertTrue(soundLevel(noLevel, calibrated: true)!.isNaN, "the calibrated signal is still there, as NaN")
+
+        let uncalibrated = soundLevelCluster(packet: packet, packetIndex: 3, calibrationEnabled: false)
+        XCTAssertEqual(soundLevel(uncalibrated, calibrated: false), 4941)
+        XCTAssertNil(soundLevel(uncalibrated, calibrated: true))
+    }
+
+    /// Packets a Shimmer3R streamed with the sound level on, as buildMsg gets them: without the
+    /// packet type byte. The firmware's own test rig decoded the same levels from the same bytes.
+    func testSoundLevelFromShimmer3RPackets() {
+        // 1024 Hz, every sensor: timestamp (3), mag, gyro, low-noise accel (6 each), pressure and
+        // temperature (3 each), high-g accel, wide-range accel, alt mag (6 each), then the level
+        // at 45, GSR, battery
+        let classic = [
+            "3c49a82e004c0010fdc9ff2f00010097f3e13cb4ef009d5e00848001200040ffe0ccc408f1fcf200000000000000807c0a330b",
+            "5c49a82b004d0012fdabff2000150077f3f83c85ef009d5e0084800140fff00020b8c400f128f30000000000004d137f0a380b",
+        ]
+        let classicLevels: [Double] = [-32768, 4941]
+        // 512 Hz: timestamp (3), mag, gyro, low-noise accel (6 each), then the level at 21, battery
+        let imu = [
+            "e3852226004d0019fdbbff310012007ef3e83c8def00801f0b",
+            "23862226004d0019fdb0ff1f00190073f3f43c8eef54232d0b",
+        ]
+        let imuLevels: [Double] = [-32768, 9044]
+
+        for (hex, want) in zip(classic, classicLevels) {
+            let packet = bytes(hex)
+            XCTAssertEqual(packet.count, 51)
+            XCTAssertEqual(soundLevel(soundLevelCluster(packet: packet, packetIndex: 45), calibrated: false), want)
+        }
+        for (hex, want) in zip(imu, imuLevels) {
+            let packet = bytes(hex)
+            XCTAssertEqual(packet.count, 25)
+            XCTAssertEqual(soundLevel(soundLevelCluster(packet: packet, packetIndex: 21), calibrated: false), want)
+        }
+    }
 }
