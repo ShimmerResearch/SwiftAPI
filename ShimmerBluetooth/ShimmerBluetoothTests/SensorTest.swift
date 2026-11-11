@@ -513,6 +513,90 @@ class SensorTest: XCTestCase {
         
     }
    
+    // MARK: Battery (VBATT, channel 0x03)
+
+    // DEV-1449: the battery was read from bytes 3-4 whatever its place in the packet, and is now
+    // read at the packet index interpretDataPacketFormat gives it.
+
+    private func batterySignal(_ objectCluster: ObjectCluster, _ name: String, _ format: Sensor.SensorFormats, _ unit: Sensor.SensorUnits) -> Double? {
+        let signal = [name, format.rawValue, unit.rawValue].joined(separator: "_")
+        guard let i = objectCluster.SignalNames.firstIndex(of: signal) else { return nil }
+        return objectCluster.SignalData[i]
+    }
+
+    private func batteryCluster(packet: [UInt8], packetIndex: Int, calibrationEnabled: Bool = true) -> ObjectCluster {
+        let sensor = BattVoltageSensor()
+        sensor.calibrationEnabled = calibrationEnabled
+        sensor.packetIndex = packetIndex
+        return sensor.processData(sensorPacket: packet, objectCluster: ObjectCluster(deviceName: "test"))
+    }
+
+    /// U12 at a 3 V reference, times 2, as the Java driver and the C# API do on both generations.
+    func testBatteryCalibration(){
+        XCTAssertEqual(BattVoltageSensor.calibrate(raw: 0), 0.0)
+        XCTAssertEqual(BattVoltageSensor.calibrate(raw: 4095), 6000.0, accuracy: 1e-9)
+        XCTAssertEqual(BattVoltageSensor.calibrate(raw: 2847), 4171.428571428572, accuracy: 1e-9)
+        XCTAssertEqual(BattVoltageSensor.calibrate(raw: 2048), 3000.7326007326005, accuracy: 1e-9)
+    }
+
+    /// The battery is read at its packet index, not at the first channel after the timestamp.
+    func testBatteryDecodesAtItsIndex(){
+        // Timestamp, then 0x002E (46) where the old code read, then 0x0B1F (2847)
+        let packet: [UInt8] = [0xE3, 0x85, 0x22, 0x2E, 0x00, 0x1F, 0x0B]
+        let battery = batteryCluster(packet: packet, packetIndex: 5)
+        XCTAssertEqual(batterySignal(battery, BattVoltageSensor.BATTERY, .Raw, .noUnit), 2847)
+        XCTAssertEqual(batterySignal(battery, BattVoltageSensor.BATTERY, .Calibrated, .milliVolts)!, 4171.428571428572, accuracy: 1e-9)
+
+        let uncalibrated = batteryCluster(packet: packet, packetIndex: 5, calibrationEnabled: false)
+        XCTAssertEqual(batterySignal(uncalibrated, BattVoltageSensor.BATTERY, .Raw, .noUnit), 2847)
+        XCTAssertNil(batterySignal(uncalibrated, BattVoltageSensor.BATTERY, .Calibrated, .milliVolts))
+        XCTAssertNil(batterySignal(uncalibrated, BattVoltageSensor.BATTERY_PERCENTAGE, .Calibrated, .percent))
+    }
+
+    /// Without an index from the inquiry response, or with one past the end of the packet, the
+    /// sensor adds nothing rather than reading the wrong bytes or out of range.
+    func testBatteryWithoutAUsableIndexAddsNothing(){
+        let packet: [UInt8] = [0xE3, 0x85, 0x22, 0x2E, 0x00, 0x1F, 0x0B]
+        for packetIndex in [-1, 6, 7] {
+            let cluster = batteryCluster(packet: packet, packetIndex: packetIndex)
+            XCTAssertTrue(cluster.SignalNames.isEmpty, "index \(packetIndex)")
+        }
+    }
+
+    /// Packets a Shimmer3R streamed, as buildMsg gets them: without the packet type byte. The
+    /// battery is the last channel, and bytes 3-4 hold the magnetometer.
+    func testBatteryFromShimmer3RPackets(){
+        func hex(_ s: String) -> [UInt8] {
+            var out: [UInt8] = []
+            var i = s.startIndex
+            while i < s.endIndex {
+                let j = s.index(i, offsetBy: 2)
+                out.append(UInt8(s[i..<j], radix: 16)!)
+                i = j
+            }
+            return out
+        }
+        // (packet, battery index, raw, mV). 1024 Hz with every sensor: timestamp (3), mag, gyro,
+        // low-noise accel (6 each), pressure and temperature (3 each), high-g accel, wide-range
+        // accel, alt mag (6 each), sound level, GSR, then the battery at 49. 512 Hz: timestamp (3),
+        // mag, gyro, low-noise accel (6 each), sound level, then the battery at 23.
+        let cases: [(String, Int, Double, Double)] = [
+            ("3c49a82e004c0010fdc9ff2f00010097f3e13cb4ef009d5e00848001200040ffe0ccc408f1fcf200000000000000807c0a330b", 49, 2867, 4200.7326007326),
+            ("5c49a82b004d0012fdabff2000150077f3f83c85ef009d5e0084800140fff00020b8c400f128f30000000000004d137f0a380b", 49, 2872, 4208.058608058608),
+            ("e3852226004d0019fdbbff310012007ef3e83c8def00801f0b", 23, 2847, 4171.428571428572),
+            ("23862226004d0019fdb0ff1f00190073f3f43c8eef54232d0b", 23, 2861, 4191.941391941392),
+        ]
+        for (packetHex, packetIndex, raw, milliVolts) in cases {
+            let packet = hex(packetHex)
+            XCTAssertEqual(packet.count, packetIndex + 2, "the battery is the last channel")
+            let cluster = batteryCluster(packet: packet, packetIndex: packetIndex)
+            XCTAssertEqual(batterySignal(cluster, BattVoltageSensor.BATTERY, .Raw, .noUnit), raw)
+            XCTAssertEqual(batterySignal(cluster, BattVoltageSensor.BATTERY, .Calibrated, .milliVolts)!, milliVolts, accuracy: 1e-9)
+            // At these voltages the charge fit comes out over 100 %, and is held at 100
+            XCTAssertEqual(batterySignal(cluster, BattVoltageSensor.BATTERY_PERCENTAGE, .Calibrated, .percent), 100.0)
+        }
+    }
+
     // DEV-1070: a GSR code below the range-3 open-circuit limit, 683, puts the amplifier output under
     // its 0.5 V reference, which no skin resistance can do, so the electrodes are open, on every range.
     // In auto-range ranges 0-2 see such codes as the device climbs after the electrodes come off, and

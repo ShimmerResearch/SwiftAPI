@@ -463,6 +463,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
             altMagSensor = AltMagSensor(hwid: REV_HW_MAJOR)
             pressureTempSensor = PressureTempSensor(hwid: REV_HW_MAJOR)
             highGAccelSensor = HighGAccelSensor(hwid: REV_HW_MAJOR)
+            battVoltageSensor = BattVoltageSensor()
         }
     }
     
@@ -502,6 +503,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
             adcExternalA0Sensor.sensorEnabled = false
             adcExternalA1Sensor.sensorEnabled = false
             adcExternalA2Sensor.sensorEnabled = false
+            battVoltageSensor.sensorEnabled = false
         }
     }
     
@@ -541,6 +543,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
             adcExternalA0Sensor.setInfoMem(infomem: infoMem)
             adcExternalA1Sensor.setInfoMem(infomem: infoMem)
             adcExternalA2Sensor.setInfoMem(infomem: infoMem)
+            battVoltageSensor.setInfoMom(infomem: infoMem)
         }
     }
 
@@ -1289,6 +1292,10 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 packetSize += 2
                 enabledSensors |= Int(SensorBitmapShimmer3.SENSOR_LN_ACCEL.rawValue)
             case ChannelContentsShimmer3.VBatt.rawValue:
+                // Not at a fixed place: after the low-noise accel on a Shimmer3 when that is on,
+                // and the last channel on a Shimmer3R
+                battVoltageSensor.sensorEnabled = true
+                battVoltageSensor.packetIndex = packetSize
                 packetSize += 2
                 enabledSensors |= Int(SensorBitmapShimmer3.SENSOR_VBATT.rawValue)
             case ChannelContentsShimmer3.XWRAccel.rawValue:

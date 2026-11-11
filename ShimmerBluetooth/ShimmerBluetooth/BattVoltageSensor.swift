@@ -7,18 +7,36 @@
 
 import Foundation
 
+/// The battery voltage, channel 0x03 (VBATT), on a Shimmer3 and a Shimmer3R.
+///
+/// Where it sits in the packet depends on what else is on: on a Shimmer3 it follows the
+/// low-noise accelerometer when that is enabled, and on a Shimmer3R it is the last channel. So
+/// it is read at `packetIndex`, which interpretDataPacketFormat sets from the inquiry response's
+/// channel list.
 public class BattVoltageSensor: Sensor , SensorProcessing{
     public static let BATTERY = "Battery"
     public static let BATTERY_PERCENTAGE = "Battery Percentage"
 
+    public var packetIndex: Int = -1
+
+    /// A raw battery reading in mV: the 12-bit ADC value at a 3 V reference, times 2 for the
+    /// divider. The same on a Shimmer3 and a Shimmer3R, as in the Java and C# APIs.
+    public static func calibrate(raw: Double) -> Double {
+        return ((raw - 0) * ((3000/1)/4095)) * 2
+    }
+
     public func processData(sensorPacket: [UInt8], objectCluster: ObjectCluster) -> ObjectCluster {
-        let battery = Array(sensorPacket[3..<5])
+        // No index yet (the inquiry response has not been read), or a packet too short for it
+        guard packetIndex >= 0, packetIndex + 2 <= sensorPacket.count else {
+            return objectCluster
+        }
+        let battery = Array(sensorPacket[packetIndex..<packetIndex+2])
         let rawBattery = Double(ShimmerUtilities.parseSensorData(sensorData: battery, dataType: SensorDataType.i16)!)
         
         objectCluster.addData(sensorName: BattVoltageSensor.BATTERY, formatName: SensorFormats.Raw.rawValue, unitName: SensorUnits.noUnit.rawValue, value: Double(rawBattery))
         if (calibrationEnabled){
             
-            let calBattery = ((rawBattery - 0) * ((3000/1)/4095)) * 2
+            let calBattery = BattVoltageSensor.calibrate(raw: rawBattery)
             objectCluster.addData(sensorName: BattVoltageSensor.BATTERY, formatName: SensorFormats.Calibrated.rawValue, unitName: SensorUnits.milliVolts.rawValue, value: Double(calBattery))
             var battVoltage = calBattery/1000
             //equations are only valid when: 3.2 < x < 4.167. Leaving a 0.2v either side just incase
