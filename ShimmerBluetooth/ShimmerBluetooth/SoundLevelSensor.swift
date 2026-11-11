@@ -8,7 +8,8 @@
 import Foundation
 
 /// The A-weighted sound level the Shimmer3R firmware computes from its microphone: channel 0x38,
-/// an int16, little-endian, in 0.01 dB(A) steps.
+/// an int16, little-endian, in 0.01 dB(A) steps. LogAndStream_Shimmer3R v1.01.026 is the first
+/// release with it.
 ///
 /// - `-32768` means no level: the firmware sends it before its first level after the microphone
 ///   capture starts, and while the capture is not running. It calibrates to NaN, not -327.68 dB.
