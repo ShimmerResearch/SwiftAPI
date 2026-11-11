@@ -63,6 +63,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
     public var exgSensor: EXGSensor = EXGSensor()
     public var pressureTempSensor : PressureTempSensor = PressureTempSensor(hwid: HardwareType.UNKNOWN.rawValue)
     var battVoltageSensor : BattVoltageSensor = BattVoltageSensor()
+    public var soundLevelSensor: SoundLevelSensor = SoundLevelSensor()
     public var RTCErrorEnabled = false;
     var infoMem: [UInt8] = []
     var inquiry: [UInt8] = []
@@ -503,6 +504,8 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
             adcExternalA1Sensor.sensorEnabled = false
             adcExternalA2Sensor.sensorEnabled = false
         }
+        // Whatever the hardware: interpretDataPacketFormat turns it back on if the channel is listed
+        soundLevelSensor.sensorEnabled = false
     }
     
     func initializeSensors(){
@@ -616,6 +619,9 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         }
         if pressureTempSensor.sensorEnabled{
             ojc = pressureTempSensor.processData(sensorPacket: bytes, objectCluster: ojc)
+        }
+        if soundLevelSensor.sensorEnabled {
+            ojc = soundLevelSensor.processData(sensorPacket: bytes, objectCluster: ojc)
         }
         if battVoltageSensor.sensorEnabled{
             ojc = battVoltageSensor.processData(sensorPacket: bytes, objectCluster: ojc)
@@ -1430,6 +1436,12 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
                 pressureTempSensor.packetIndexPressure = packetSize
                 packetSize += 3
                 enabledSensors |= Int(SensorBitmapShimmer3.SENSOR_PRESSURE.rawValue)
+            case ChannelContentsShimmer3.SoundLevel.rawValue where REV_HW_MAJOR == HardwareType.Shimmer3R.rawValue:
+                // No enabled-sensors bit: the firmware turns it on from configuration byte 233
+                // bit 4, so the channel list is what says it is there
+                soundLevelSensor.sensorEnabled = true
+                soundLevelSensor.packetIndex = packetSize
+                packetSize += 2
             default:
                 packetSize += 2
             }
@@ -2248,6 +2260,7 @@ public class Shimmer3Protocol : NSObject, ShimmerProtocol {
         case STRAIN_HIGH = 0x27
         case STRAIN_LOW = 0x28
         case GsrRaw = 0x1C
+        case SoundLevel = 0x38 // Shimmer3R only
     }
 
     

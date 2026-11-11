@@ -41,6 +41,7 @@ public class Sensor: NSObject{
         case percent = "%"
         case kpascal = "kPa"
         case degreescelcius = "Degree Celsius"
+        case decibelsA = "dB(A)"
     }
     public var sensorEnabled:Bool = false
     public var calibrationEnabled:Bool = true
